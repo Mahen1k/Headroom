@@ -202,6 +202,28 @@ def _estimate_compression_savings_usd(model: str, tokens_saved: int) -> float:
         return 0.0
 
 
+def _estimate_cache_savings_usd(model: str, cache_read_tokens: int) -> float:
+    """Estimate cache-read savings in USD from discounted input tokens."""
+
+    litellm = _get_litellm_module()
+    if cache_read_tokens <= 0 or litellm is None:
+        return 0.0
+
+    try:
+        resolved = _resolve_litellm_model(model)
+        info = litellm.model_cost.get(resolved, {})
+        input_cost_per_token = info.get("input_cost_per_token")
+        if not input_cost_per_token:
+            return 0.0
+        cache_read_cost_per_token = info.get("cache_read_input_token_cost", input_cost_per_token)
+        savings_per_token = float(input_cost_per_token) - float(cache_read_cost_per_token)
+        if savings_per_token <= 0:
+            return 0.0
+        return float(cache_read_tokens) * savings_per_token
+    except Exception:
+        return 0.0
+
+
 def _estimate_input_cost_usd(
     model: str,
     input_tokens: int,
