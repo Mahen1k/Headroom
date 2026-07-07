@@ -185,8 +185,9 @@ def _try_detect_json(content: str) -> DetectionResult | None:
     """Try to detect JSON array content."""
     content = content.strip()
 
-    # Quick check: must start with [ for array
-    if not content.startswith("["):
+    # Quick check: JSON arrays start with `[`, but web-search tools also emit
+    # raw object streams (`{...} {...}`) or JSONL. Keep both paths alive.
+    if not content.startswith(("[", "{")):
         return None
 
     try:
@@ -207,6 +208,42 @@ def _try_detect_json(content: str) -> DetectionResult | None:
             )
     except json.JSONDecodeError:
         pass
+
+    # Web-search tools sometimes emit space-separated JSON objects or JSONL.
+    # Decode the top-level values one by one so nested objects and braces
+    # inside strings still work. Normalize those into an array when every
+    # top-level value parses cleanly as a dict.
+    if content.startswith("{"):
+        decoder = json.JSONDecoder()
+        parsed_items = []
+        idx = 0
+        length = len(content)
+
+        while idx < length:
+            while idx < length and content[idx].isspace():
+                idx += 1
+            if idx >= length:
+                break
+            try:
+                parsed_item, next_idx = decoder.raw_decode(content, idx)
+            except json.JSONDecodeError:
+                return None
+            if not isinstance(parsed_item, dict):
+                return None
+            parsed_items.append(parsed_item)
+            idx = next_idx
+
+        if parsed_items:
+            return DetectionResult(
+                ContentType.JSON_ARRAY,
+                0.9,
+                {
+                    "item_count": len(parsed_items),
+                    "is_dict_array": True,
+                    "was_space_separated": " " in content and "\n" not in content,
+                    "was_json_lines": "\n" in content,
+                },
+            )
 
     return None
 
