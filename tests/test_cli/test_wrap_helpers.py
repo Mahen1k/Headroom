@@ -94,6 +94,46 @@ def test_print_wrap_banner_title_is_centered_or_near_centered() -> None:
     )
 
 
+def test_prepend_rtk_bin_to_path_injects_managed_bin_dir(monkeypatch: pytest.MonkeyPatch) -> None:
+    managed_dir = Path("/tmp/headroom-bin")
+    monkeypatch.setattr("headroom.rtk.RTK_BIN_DIR", managed_dir)
+
+    env = {"PATH": "/usr/bin:/bin"}
+
+    wrap_mod._prepend_rtk_bin_to_path(env)
+
+    assert env["PATH"].split(os.pathsep)[0] == str(managed_dir)
+    assert "/usr/bin" in env["PATH"]
+
+
+def test_prepend_rtk_bin_to_path_updates_windows_style_path_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    managed_dir = Path("/tmp/headroom-bin")
+    monkeypatch.setattr("headroom.rtk.RTK_BIN_DIR", managed_dir)
+
+    env = {"Path": "C:\\Windows\\System32"}
+
+    wrap_mod._prepend_rtk_bin_to_path(env)
+
+    assert env["Path"].split(os.pathsep)[0] == str(managed_dir)
+    assert "PATH" not in env
+
+
+def test_prepend_rtk_bin_to_path_does_not_duplicate_windows_style_path_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    managed_dir = Path("/tmp/headroom-bin")
+    monkeypatch.setattr("headroom.rtk.RTK_BIN_DIR", managed_dir)
+
+    env = {"Path": f"{managed_dir}{os.pathsep}C:\\Windows\\System32"}
+
+    wrap_mod._prepend_rtk_bin_to_path(env)
+
+    assert env["Path"] == f"{managed_dir}{os.pathsep}C:\\Windows\\System32"
+    assert env["Path"].split(os.pathsep).count(str(managed_dir)) == 1
+
+
 # ---------------------------------------------------------------------------
 # _setup_context_tool_for_agent — all five branches:
 #   1. lean-ctx mode → calls _setup_lean_ctx_agent, returns None
