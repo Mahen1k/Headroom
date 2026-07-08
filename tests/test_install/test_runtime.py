@@ -14,6 +14,7 @@ from headroom.install.runtime import (
     _clear_pid,
     _deployment_env,
     _mount_source,
+    _pid_alive,
     _read_pid,
     _runtime_env,
     _write_pid,
@@ -253,6 +254,34 @@ def test_write_read_and_clear_pid(monkeypatch, tmp_path: Path) -> None:
     assert _read_pid("default") is None
 
 
+def test_pid_alive_uses_psutil_without_signal(monkeypatch) -> None:
+    fake_psutil = types.ModuleType("psutil")
+    fake_psutil.pid_exists = lambda pid: True if pid > 0 else False  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
+    monkeypatch.setattr(
+        "headroom.install.runtime.os.kill",
+        lambda pid, sig: (_ for _ in ()).throw(AssertionError("os.kill should not run")),
+    )
+
+    assert _pid_alive(123) is True
+
+
+def test_pid_alive_falls_back_and_handles_systemerror(monkeypatch) -> None:
+    fake_psutil = types.ModuleType("psutil")
+
+    def _raise_pid_exists(pid: int) -> bool:
+        raise RuntimeError("boom")
+
+    fake_psutil.pid_exists = _raise_pid_exists  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
+    monkeypatch.setattr(
+        "headroom.install.runtime.os.kill",
+        lambda pid, sig: (_ for _ in ()).throw(SystemError("WinError 87")),
+    )
+
+    assert _pid_alive(123) is False
+
+
 def test_runtime_start_lock_is_nonblocking(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
@@ -272,7 +301,12 @@ def test_runtime_start_lock_blocks_another_process(monkeypatch, tmp_path: Path) 
         "with acquire_runtime_start_lock('default') as acquired:\n"
         "    print(acquired)\n"
     )
-    env = {**os.environ, "HOME": str(tmp_path), "PYTHONPATH": str(Path.cwd())}
+    env = {
+        **os.environ,
+        "HOME": str(tmp_path),
+        "USERPROFILE": str(tmp_path),
+        "PYTHONPATH": str(Path.cwd()),
+    }
 
     with acquire_runtime_start_lock("default") as acquired:
         assert acquired is True
@@ -519,7 +553,9 @@ def test_start_stop_wait_and_runtime_status_branches(monkeypatch, tmp_path: Path
     assert runtime_status(python_manifest) == "stopped"
 
     _write_pid("default", 125)
-    monkeypatch.setattr("headroom.install.runtime.pid_alive", lambda pid: False)
+    monkeypatch.setattr("headroom.install.runtime._pid_alive", lambda pid: True)
+    assert runtime_status(python_manifest) == "running"
+    monkeypatch.setattr("headroom.install.runtime._pid_alive", lambda pid: False)
     assert runtime_status(python_manifest) == "stopped"
 
 
@@ -581,7 +617,7 @@ def test_runtime_status_reads_container_and_pid_state(monkeypatch, tmp_path: Pat
     pid_file = tmp_path / ".headroom" / "deploy" / "default" / "runner.pid"
     pid_file.parent.mkdir(parents=True)
     pid_file.write_text("123", encoding="utf-8")
-    monkeypatch.setattr("headroom.install.runtime.pid_alive", lambda pid: True)
+    monkeypatch.setattr("headroom.install.runtime._pid_alive", lambda pid: True)
     python_manifest = DeploymentManifest(
         profile="default",
         preset="persistent-service",
@@ -623,7 +659,7 @@ def test_runtime_status_reports_live_pid_without_terminating(monkeypatch, tmp_pa
         raise AssertionError(f"status must not signal the live proxy (pid={pid}, sig={sig})")
 
     monkeypatch.setattr("headroom.install.runtime.os.kill", fail_kill)
-    monkeypatch.setattr("headroom.install.runtime.pid_alive", lambda pid: True)
+    monkeypatch.setattr("headroom.install.runtime._pid_alive", lambda pid: True)
 
     assert runtime_status(_python_service_manifest()) == "running"
     assert pid_file.exists()  # status left the deployment untouched
