@@ -2830,6 +2830,10 @@ class AnthropicHandlerMixin:
                     if _auth_header.startswith("Bearer ") and not _auth_header.startswith(
                         "Bearer sk-ant-api"
                     ):
+                        from headroom.proxy.savings_tracker import (
+                            _estimate_cache_savings_usd,
+                            _estimate_compression_savings_usd,
+                        )
                         from headroom.subscription.tracker import (
                             get_subscription_tracker as _get_sub_tracker,
                         )
@@ -2840,6 +2844,10 @@ class AnthropicHandlerMixin:
                                 tokens_submitted=optimized_tokens,
                                 tokens_saved_compression=tokens_saved,
                                 tokens_saved_cache_reads=cr_tokens,
+                                compression_savings_usd=_estimate_compression_savings_usd(
+                                    model, tokens_saved
+                                ),
+                                cache_savings_usd=_estimate_cache_savings_usd(model, cr_tokens),
                             )
 
                     # The pre-refactor PERF emit (above) read raw usage
