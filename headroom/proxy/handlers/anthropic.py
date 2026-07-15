@@ -2251,9 +2251,16 @@ class AnthropicHandlerMixin:
             # schema.  Mirrors the same pass that the OpenAI handler applies.
             _tools_compaction_started = time.time()
             try:
-                from headroom.proxy.tool_schema_compaction import compact_tools
+                from headroom.proxy.tool_schema_compaction import (
+                    compact_tools,
+                    tool_schema_compaction_enabled,
+                )
 
-                body, _tools_modified, _tools_before_bytes, _tools_after_bytes = compact_tools(body)
+                _tools_modified = False
+                if tool_schema_compaction_enabled():
+                    body, _tools_modified, _tools_before_bytes, _tools_after_bytes = compact_tools(
+                        body
+                    )
                 if _tools_modified:
                     tools = body["tools"]
                     transforms_applied.append("anthropic:tool_schema_compaction")
@@ -3736,7 +3743,10 @@ class AnthropicHandlerMixin:
                     # blocks every other request for the duration; a timeout
                     # here is caught below and passes the item through.
                     result = await self._run_compression_in_executor(
-                        lambda messages=messages, model=model, context_limit=context_limit, frozen_message_count=frozen_message_count: (
+                        lambda messages=messages,
+                        model=model,
+                        context_limit=context_limit,
+                        frozen_message_count=frozen_message_count: (
                             self.anthropic_pipeline.apply(
                                 messages=messages,
                                 model=model,
