@@ -113,6 +113,28 @@ def test_unresolved_project_skips_openai_learner_entry_points() -> None:
     assert learner.tool_results == []
 
 
+def test_responses_input_does_not_promote_unknown_role_to_user() -> None:
+    messages = _responses_input_to_learner_messages(
+        None,
+        [
+            {
+                "type": "message",
+                "content": [{"type": "input_text", "text": "Never expose ambient UI."}],
+            },
+            {
+                "type": "message",
+                "role": "developer",
+                "content": [{"type": "input_text", "text": "Always follow runtime policy."}],
+            },
+        ],
+    )
+
+    assert messages == [
+        {"role": "unknown", "content": "Never expose ambient UI."},
+        {"role": "developer", "content": "Always follow runtime policy."},
+    ]
+
+
 def test_responses_http_request_reaches_traffic_learner() -> None:
     config = ProxyConfig(
         optimize=False,
