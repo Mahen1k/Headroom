@@ -15,6 +15,7 @@ from .models import (
     DeploymentManifest,
     InstallPreset,
     ProviderSelectionMode,
+    RuntimeKind,
     SupervisorKind,
     ToolTarget,
 )
@@ -182,7 +183,19 @@ def build_manifest(
         proxy_args.extend(["--mode", proxy_mode])
     proxy_args.append("--telemetry" if telemetry_enabled else "--no-telemetry")
     if memory_enabled:
-        proxy_args.extend(["--memory", "--memory-db-path", str(_paths.memory_db_path())])
+        proxy_args.append("--memory")
+        # `_paths.memory_db_path()` resolves against the HOST home. A container
+        # runtime cannot use it: the container's HOME is /tmp/headroom-home and
+        # the host's ~/.headroom is bind-mounted there, so a host path like
+        # /home/<user>/.headroom/memory.db does not exist inside the container,
+        # SQLite fails to open the DB, /readyz stays 503, and the deployment
+        # times out and rolls back (#2803). Omit the flag for a container runtime:
+        # the proxy then resolves the DB under its own cwd (.headroom/memory.db),
+        # which is the container's workdir and therefore the bind mount, landing
+        # in the same host file the explicit path intended. On the host (python)
+        # runtime the resolved host path is correct, so keep passing it.
+        if runtime_kind != RuntimeKind.DOCKER.value:
+            proxy_args.extend(["--memory-db-path", str(_paths.memory_db_path())])
     if learn_enabled is not None:
         proxy_args.append("--learn" if learn_enabled else "--no-learn")
     proxy_args.extend(["--memory-storage", memory_storage_mode])

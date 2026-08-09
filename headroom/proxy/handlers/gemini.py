@@ -22,6 +22,7 @@ from headroom.proxy.auth_mode import classify_client
 from headroom.proxy.compression_decision import CompressionDecision
 from headroom.proxy.helpers import COMPRESSION_TIMEOUT_SECONDS, extract_tags
 from headroom.proxy.outcome import RequestOutcome
+from headroom.proxy.token_counting import gemini_output_tokens
 
 logger = logging.getLogger("headroom.proxy")
 
@@ -462,7 +463,9 @@ class GeminiHandlerMixin:
                     # output_tokens) would then raise TypeError on the non-error
                     # path. Mirrors the streaming _usage_int guard.
                     total_input_tokens = _usage_int(usage.get("promptTokenCount"))
-                    output_tokens = _usage_int(usage.get("candidatesTokenCount"))
+                    output_tokens = gemini_output_tokens(
+                        usage
+                    )  # includes thinking tokens (2.5-family)
                     cache_read_tokens = _usage_int(usage.get("cachedContentTokenCount"))
                 except (json.JSONDecodeError, ValueError, KeyError, TypeError, AttributeError):
                     pass
@@ -714,7 +717,9 @@ class GeminiHandlerMixin:
                         if usage.get("promptTokenCount") is None
                         else usage["promptTokenCount"]
                     )
-                    output_tokens = _usage_int(usage.get("candidatesTokenCount"))
+                    output_tokens = gemini_output_tokens(
+                        usage
+                    )  # includes thinking tokens (2.5-family)
                     # Gemini returns cachedContentTokenCount for context-cached tokens
                     # These are charged at 10-25% of the input price depending on model
                     cache_read_tokens = _usage_int(usage.get("cachedContentTokenCount"))
@@ -732,6 +737,24 @@ class GeminiHandlerMixin:
                     )
 
                 uncached_input_tokens = max(0, total_input_tokens - cache_read_tokens)
+
+                # optimized_tokens carries Gemini's own promptTokenCount, which is
+                # on the provider's tokenizer scale (it feeds billing/dashboard),
+                # while original_tokens is a LOCAL estimator count. When Gemini
+                # counts the forwarded prompt higher than our estimator does,
+                # attempted_input_tokens (optimized + saved) exceeded the local
+                # original_tokens and shipped a structurally-impossible
+                # eligible_pct > 100 plus a phantom tokens_inflated. Lift the
+                # baseline onto the provider scale when a provider count is
+                # present, mirroring the streaming finalizer's tested handling in
+                # _finalize_stream_response so the two Gemini paths agree. Guarded
+                # on a present count so a null/absent promptTokenCount leaves the
+                # local baseline untouched.
+                effective_original_tokens = (
+                    max(original_tokens, total_input_tokens + tokens_saved)
+                    if total_input_tokens > 0
+                    else original_tokens
+                )
 
                 # Eligible-tracking is TODO for Gemini; pass the full
                 # pre-compression request size as the fallback denominator.
@@ -752,7 +775,7 @@ class GeminiHandlerMixin:
                     provider=provider_name,
                     model=model,
                     status_code=response.status_code,
-                    original_tokens=original_tokens,
+                    original_tokens=effective_original_tokens,
                     optimized_tokens=total_input_tokens,
                     output_tokens=output_tokens,
                     tokens_saved=tokens_saved,

@@ -26,6 +26,7 @@ import os
 import re
 import sqlite3
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -60,6 +61,50 @@ _BASH_VOLATILE_SUFFIX_RE = re.compile(
     r"|\s+-A\s*\d+|\s+-B\s*\d+|\s+-C\s*\d+"
     r"|\s+2>&1|\s+2>/dev/null)+\s*$"
 )
+
+# Agent harnesses can encode orchestration metadata as user-role messages.
+# These prefixes identify whole messages that are not authored by the user.
+_HARNESS_USER_PREFIXES = (
+    "another language model started to solve this problem and produced a summary",
+    "<app-context>",
+    "<codex_delegation>",
+    "<environment_context>",
+    "<heartbeat>",
+    "<permissions instructions>",
+    "<skills_instructions>",
+    "# agents.md instructions for ",
+    "you are in a fork of an existing codex thread",
+)
+
+_MEMORY_CONTEXT_MARKERS = (
+    "\n\n## relevant memories",
+    "\n## relevant memories",
+)
+
+_AMBIENT_CONTEXT_MARKERS = ("<in-app-browser-context",)
+
+
+def _canonicalize_user_text(text: str) -> str:
+    """Remove proxy- or client-appended context from a user-role message."""
+    canonical = text or ""
+    folded = canonical.casefold()
+    if folded.lstrip().startswith("## relevant memories"):
+        return ""
+    markers = (*_MEMORY_CONTEXT_MARKERS, *_AMBIENT_CONTEXT_MARKERS)
+    marker_indexes = [folded.find(marker) for marker in markers]
+    marker_indexes = [index for index in marker_indexes if index >= 0]
+    if marker_indexes:
+        canonical = canonical[: min(marker_indexes)]
+    return canonical.strip()
+
+
+def _is_learnable_user_text(text: str) -> bool:
+    """Return whether user-role text is plausibly authored by the user."""
+    canonical = _canonicalize_user_text(text)
+    if not canonical:
+        return False
+    folded = canonical.lstrip().casefold()
+    return not any(folded.startswith(prefix) for prefix in _HARNESS_USER_PREFIXES)
 
 
 # =============================================================================
@@ -406,6 +451,7 @@ class TrafficLearner:
         max_history: int = 20,
         dedup_window: int = 100,
         min_evidence: int = 5,
+        max_pending_patterns: int = 2048,
     ) -> None:
         """Initialize the traffic learner.
 
@@ -424,12 +470,19 @@ class TrafficLearner:
         self.agent_type = agent_type
         self._max_history = max_history
         self._min_evidence = min_evidence
+        self._max_pending_patterns = max_pending_patterns
 
         # Recent tool call history for error→recovery matching
         self._tool_history: list[dict[str, Any]] = []
 
-        # Pattern accumulator: hash → (pattern, count)
-        self._pattern_counts: dict[str, tuple[ExtractedPattern, int]] = {}
+        # Pattern accumulator: hash → (pattern, count). LRU-ordered and capped:
+        # a pattern that is seen once but never reaches ``min_evidence`` would
+        # otherwise linger here forever, so this dict grew unbounded over a
+        # long-lived proxy's traffic (the sibling ``_saved_hashes`` is trimmed
+        # to ``dedup_window`` for the same reason; this one was missed). Evicting
+        # the least-recently-corroborated pending pattern is safe: if it recurs
+        # it simply restarts accumulation.
+        self._pattern_counts: OrderedDict[str, tuple[ExtractedPattern, int]] = OrderedDict()
 
         # Dedup: hashes of patterns already saved to DB
         self._saved_hashes: set[str] = set()
@@ -585,10 +638,15 @@ class TrafficLearner:
         if not patterns:
             return
 
-        # Bucket patterns by project.
+        # Bucket patterns by project. discover_projects() walks the filesystem
+        # to decode escaped project directory names, which on a large home tree
+        # takes minutes; running it inline blocked the event loop, so uvicorn
+        # could not answer /readyz and supervisors killed a proxy that was
+        # merely busy. It is called once per learner (cached below), so the
+        # thread hop costs nothing on the steady-state path.
         if self._project_roots_cache is None:
             try:
-                self._project_roots_cache = plugin.discover_projects()
+                self._project_roots_cache = await asyncio.to_thread(plugin.discover_projects)
             except Exception as e:
                 logger.warning("discover_projects failed: %s", e)
                 self._project_roots_cache = []
@@ -759,7 +817,10 @@ class TrafficLearner:
                 continue
 
             if role == "user":
-                patterns = self._extract_preferences(content)
+                canonical = _canonicalize_user_text(self._strip_system_reminders(content))
+                if not _is_learnable_user_text(canonical):
+                    continue
+                patterns = self._extract_preferences(canonical)
                 for pattern in patterns:
                     await self._accumulate(pattern)
 
@@ -1014,7 +1075,9 @@ class TrafficLearner:
           truncation past ``max_chars``.
         """
 
-        cleaned = self._strip_system_reminders(user_text)[:500]
+        cleaned = _canonicalize_user_text(self._strip_system_reminders(user_text))[:500]
+        if not _is_learnable_user_text(cleaned):
+            return []
         correction = self._find_correction(cleaned)
         if correction is None:
             return []
@@ -1196,7 +1259,13 @@ class TrafficLearner:
             existing, count = self._pattern_counts[h]
             count += 1
             self._pattern_counts[h] = (existing, count)
+            # Mark as most-recently-corroborated so it survives LRU eviction.
+            self._pattern_counts.move_to_end(h)
         else:
+            # Bound the pending accumulator so one-off patterns can't grow it
+            # without limit; drop the least-recently-corroborated pending entry.
+            if len(self._pattern_counts) >= self._max_pending_patterns:
+                self._pattern_counts.popitem(last=False)
             self._pattern_counts[h] = (pattern, 1)
             return  # First sighting — wait for more evidence
 

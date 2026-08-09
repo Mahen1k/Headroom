@@ -107,3 +107,38 @@ def test_install_apply_no_learn_is_persistent_override(monkeypatch) -> None:
     assert manifest.memory_enabled is True
     assert manifest.learn_enabled is False
     assert "--no-learn" in manifest.proxy_args
+
+
+def test_docker_learning_options_omit_host_memory_path() -> None:
+    manifest = build_manifest(
+        profile="memory-docker",
+        preset="persistent-docker",
+        runtime_kind="docker",
+        scope="user",
+        provider_mode="manual",
+        targets=["claude"],
+        port=8787,
+        backend="anthropic",
+        anyllm_provider=None,
+        region=None,
+        proxy_mode=None,
+        memory_enabled=True,
+        learn_enabled=True,
+        memory_storage_mode="project",
+        traffic_learning_min_evidence=7,
+        memory_project_root="/tmp/scratch-project",
+        telemetry_enabled=False,
+        image="ghcr.io/headroomlabs-ai/headroom:latest",
+    )
+
+    assert "--memory" in manifest.proxy_args
+    assert "--memory-db-path" not in manifest.proxy_args
+    assert "--learn" in manifest.proxy_args
+    assert manifest.proxy_args[-6:] == [
+        "--memory-storage",
+        "project",
+        "--min-evidence",
+        "7",
+        "--memory-project-root",
+        "/tmp/scratch-project",
+    ]
