@@ -213,7 +213,6 @@ def test_dashboard_per_project_setup_url_uses_current_origin() -> None:
         _install_dashboard_routes(page)
 
         page.goto("http://127.0.0.1:8788/dashboard", wait_until="load")
-        page.get_by_role("button", name="Lifetime").click()
         expect(
             page.get_by_text(
                 "ANTHROPIC_BASE_URL: http://127.0.0.1:8788/p/<project-name>",
@@ -228,7 +227,6 @@ def test_dashboard_per_project_setup_url_uses_current_origin() -> None:
         ).to_have_count(0)
 
         page.goto("http://headroom.local:9393/dashboard", wait_until="load")
-        page.get_by_role("button", name="Lifetime").click()
         expect(
             page.get_by_text(
                 "ANTHROPIC_BASE_URL: http://headroom.local:9393/p/<project-name>",
