@@ -29,8 +29,10 @@ from headroom.proxy.helpers import (
     extract_tags,
     jitter_delay_ms,
 )
+from headroom.proxy.identity import resolve_memory_identity
 from headroom.proxy.loopback_guard import is_loopback_host
 from headroom.proxy.stage_timer import StageTimer, emit_stage_timings_log
+from headroom.proxy.upstream_guard import is_safe_upstream_url
 from headroom.proxy.ws_headers import WS_HOP_BY_HOP_HEADERS
 from headroom.proxy.ws_session_registry import (
     TerminationCause,
@@ -374,6 +376,13 @@ def _resolve_openai_upstream_base(request_headers: dict[str, str]) -> str | None
         normalized = f"{normalized}{path}"
 
     if urlparse(normalized).scheme not in {"http", "https"}:
+        return None
+    if not is_safe_upstream_url(normalized):
+        # Client-supplied upstream resolves to a private/loopback/link-local or
+        # cloud-metadata address (SSRF). Ignore the override and fall back to the
+        # configured upstream; set HEADROOM_ALLOWED_BASE_URLS to permit specific
+        # internal endpoints.
+        logger.warning("ignoring unsafe x-headroom-base-url override: %r", raw_base_url)
         return None
     return normalized
 
@@ -3001,10 +3010,7 @@ class OpenAIHandlerMixin:
         memory_user_id: str | None = None
         memory_request_ctx = None
         if self.memory_handler:
-            memory_user_id = request.headers.get(
-                "x-headroom-user-id",
-                os.environ.get("USER", os.environ.get("USERNAME", "default")),
-            )
+            memory_user_id = resolve_memory_identity(request)
             # Per-project memory routing (GH #462). Built once per request
             # so every save/search/inject resolves to the same workspace.
             from headroom.memory.storage_router import (
@@ -4946,10 +4952,7 @@ class OpenAIHandlerMixin:
         memory_user_id: str | None = None
         memory_request_ctx = None
         if self.memory_handler:
-            memory_user_id = request.headers.get(
-                "x-headroom-user-id",
-                os.environ.get("USER", os.environ.get("USERNAME", "default")),
-            )
+            memory_user_id = resolve_memory_identity(request)
             from headroom.memory.storage_router import (
                 RequestContext as _MemRequestContext,
             )
@@ -6715,12 +6718,7 @@ class OpenAIHandlerMixin:
                 nonlocal memory_user_id, memory_request_ctx
 
                 memory_user_id_candidate = (
-                    ws_headers.get(
-                        "x-headroom-user-id",
-                        os.environ.get("USER", os.environ.get("USERNAME", "default")),
-                    )
-                    if self.memory_handler
-                    else None
+                    resolve_memory_identity(websocket) if self.memory_handler else None
                 )
                 memory_decision = MemoryDecision.decide(
                     headers=ws_headers,
