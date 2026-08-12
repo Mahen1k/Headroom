@@ -32,7 +32,8 @@ import subprocess
 import sys
 import time
 import urllib.parse
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, cast
 
@@ -214,6 +215,51 @@ def _read_text(path: Path) -> str:
 def _write_text(path: Path, content: str) -> None:
     """Write a text file as UTF-8 without translating line endings (preserves CRLF)."""
     fsutil.write_text(path, content)
+
+
+@contextmanager
+def _claude_settings_lock(settings_path: Path) -> Iterator[None]:
+    """Hold an exclusive lock around one settings.local.json read/modify/write.
+
+    Overlapping ``headroom wrap`` processes share that file. ``fsutil.write_text``
+    already replaces atomically, but two unlocked read/modify/write cycles can
+    still interleave: each snapshots a stale previous value, and the first to
+    exit restores over the second wrap's live setting. Same sidecar-lock shape
+    as ``headroom.install.runtime.acquire_runtime_start_lock`` (msvcrt on
+    Windows, fcntl elsewhere). The lock is held only for the mutation, not the
+    wrapped session.
+    """
+    lock_path = settings_path.parent / f".{settings_path.name}.lock"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_file = open(lock_path, "a+b")
+    try:
+        if lock_file.tell() == 0:
+            lock_file.write(b"\0")
+            lock_file.flush()
+        lock_file.seek(0)
+        if sys.platform == "win32":
+            import msvcrt
+
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            lock_file.seek(0)
+            if sys.platform == "win32":
+                import msvcrt
+
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        lock_file.close()
 
 
 def _read_settings_for_write(path: Path) -> dict[str, Any]:
@@ -455,6 +501,121 @@ def _resolved_tool_search_mode(flag_value: str | None) -> str:
 def _tool_search_mode_is_active(value: str) -> bool:
     """Whether an ``ENABLE_TOOL_SEARCH`` mode keeps tool deferral on (#746)."""
     return value.strip().lower() not in _TOOL_SEARCH_FALSY
+
+
+def _should_persist_tool_search_settings(
+    *,
+    flag_value: str | None,
+    resolved_value: str | None,
+) -> bool:
+    """Whether wrap should write ``ENABLE_TOOL_SEARCH`` into settings.local.json.
+
+    Daemon-spawned conversation workers read settings fresh (#951 / #2492), so a
+    process-env-only ``false`` never reaches them. Persist when the user asked
+    via ``--tool-search``, or when the resolved mode disables deferral (shell
+    ``ENABLE_TOOL_SEARCH=false`` / Foundry-compat defaults). Leaving the generic
+    ``true`` default unwritten avoids stomping a user settings value when wrap
+    did not change tool-search behavior.
+    """
+    if flag_value is not None:
+        return True
+    if resolved_value is None:
+        return False
+    stripped = resolved_value.strip()
+    if not stripped:
+        return False
+    return not _tool_search_mode_is_active(stripped)
+
+
+def _read_claude_settings_env_value(
+    key: str,
+    *,
+    settings_path: Path | None = None,
+) -> str | None:
+    """Return ``payload['env'][key]`` from a Claude settings file, or ``None``."""
+    path = settings_path or (Path.cwd() / ".claude" / "settings.local.json")
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(_read_text(path))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    env_map = payload.get("env")
+    if not isinstance(env_map, dict):
+        return None
+    value = env_map.get(key)
+    return value if isinstance(value, str) else None
+
+
+def _write_claude_wrap_tool_search(
+    value: str,
+    *,
+    settings_path: Path | None = None,
+) -> str | None:
+    """Persist ``ENABLE_TOOL_SEARCH`` into project-local settings for workers (#2492).
+
+    Same settings.local.json path as :func:`_write_claude_wrap_base_url` so
+    daemon-spawned conversation workers see the session's resolved tool-search
+    mode. Returns the previous value for restore on wrap exit.
+
+    The read/modify/write is serialized with :func:`_claude_settings_lock` and
+    refuses to clobber a malformed existing file (same as
+    :func:`_read_settings_for_write`).
+    """
+    path = settings_path or (Path.cwd() / ".claude" / "settings.local.json")
+    with _claude_settings_lock(path):
+        payload = _read_settings_for_write(path)
+        env_map = dict(payload.get("env") or {}) if isinstance(payload.get("env"), dict) else {}
+        previous = env_map.get(_TOOL_SEARCH_ENV)
+        env_map[_TOOL_SEARCH_ENV] = value
+        payload["env"] = env_map
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _write_text(path, json.dumps(payload, indent=2) + "\n")
+        return previous if isinstance(previous, str) else None
+
+
+def _restore_claude_wrap_tool_search(
+    previous: str | None,
+    *,
+    written: str,
+    settings_path: Path | None = None,
+) -> None:
+    """Restore (or remove) ``ENABLE_TOOL_SEARCH`` written by wrap (#2492).
+
+    Compare-before-restore: only mutate the file when it still contains
+    ``written``, the value this wrap put there. If another wrap or a user edit
+    changed the key, leave it. A malformed or unreadable file is left untouched
+    rather than rewritten as ``{}``.
+    """
+    path = settings_path or (Path.cwd() / ".claude" / "settings.local.json")
+    with _claude_settings_lock(path):
+        if not path.exists():
+            return
+        try:
+            payload = _read_settings_for_write(path)
+        except click.ClickException:
+            return
+        env_map = payload.get("env")
+        if not isinstance(env_map, dict):
+            return
+        current = env_map.get(_TOOL_SEARCH_ENV)
+        if not isinstance(current, str) or current != written:
+            return
+        if previous is None:
+            del env_map[_TOOL_SEARCH_ENV]
+            if env_map:
+                payload["env"] = env_map
+            else:
+                payload.pop("env", None)
+        else:
+            env_map[_TOOL_SEARCH_ENV] = previous
+            payload["env"] = env_map
+        if payload:
+            _write_text(path, json.dumps(payload, indent=2) + "\n")
+        else:
+            path.unlink(missing_ok=True)
 
 
 def _live_wrap_module() -> Any:
@@ -4429,7 +4590,10 @@ def wrap_selfheal(marker: str | None) -> None:
         "proxy. MODE is true (default), auto, auto:N, or false. Without it, a "
         "custom ANTHROPIC_BASE_URL makes Claude Code load every tool schema "
         "eagerly, inflating local context (issue #746). A pre-set "
-        "ENABLE_TOOL_SEARCH env var is respected."
+        "ENABLE_TOOL_SEARCH env var is respected for the launched process. "
+        "Daemon-spawned conversation workers read settings.local.json fresh "
+        "(issue #951), so disabling tool search also reconciles that file "
+        "(issue #2492)."
     ),
 )
 @click.option(
@@ -4507,6 +4671,9 @@ def claude(
 
     proxy_holder: list[subprocess.Popen | None] = [None]
     _saved_base_url: list[str | None] = [None]  # previous settings.json value for restore
+    _saved_tool_search: list[str | None] = [None]  # previous ENABLE_TOOL_SEARCH for restore
+    _written_tool_search: list[str | None] = [None]  # value this wrap persisted
+    _persisted_tool_search: list[bool] = [False]
     _settings_foundry: list[bool] = [False]
     port_holder: list[int] = [port]
     _settings_vertex: list[bool] = [False]
@@ -4738,6 +4905,7 @@ def claude(
         # Issue #746: keep Claude Code's on-demand tool loading on through the
         # proxy so tool schemas are not eagerly materialized into local context.
         _tool_search_value = _configure_tool_search_env(env, tool_search)
+        _resolved_tool_search = env.get(_TOOL_SEARCH_ENV)
         if _tool_search_value is not None:
             # Describe what the written value actually does: --tool-search
             # false/0/no/off turns deferral OFF, and the banner must say so
@@ -4754,6 +4922,56 @@ def claude(
             click.echo(
                 f"  {_TOOL_SEARCH_ENV}={env.get(_TOOL_SEARCH_ENV)} "
                 "(using your existing environment value)"
+            )
+
+        # Issue #2492: daemon workers read settings.local.json, not the parent
+        # process env. When the user disables tool search (flag or env), or
+        # passes an explicit --tool-search mode, reconcile the same file wrap
+        # already uses for the base URL (#951) so workers stop sending
+        # tool_search_server. Related: #2477 (Foundry default in process env).
+        _settings_tool_search = _read_claude_settings_env_value(
+            _TOOL_SEARCH_ENV, settings_path=_wrap_settings_path
+        )
+        if (
+            _settings_tool_search is not None
+            and _resolved_tool_search is not None
+            and _settings_tool_search.strip()
+            and _resolved_tool_search.strip()
+            and _settings_tool_search.strip().lower() != _resolved_tool_search.strip().lower()
+        ):
+            if _should_persist_tool_search_settings(
+                flag_value=tool_search, resolved_value=_resolved_tool_search
+            ):
+                click.echo(
+                    f"  Warning: {_wrap_settings_path} has "
+                    f"{_TOOL_SEARCH_ENV}={_settings_tool_search!r} but this "
+                    f"session uses {_resolved_tool_search!r}; reconciling "
+                    "settings for daemon workers (issue #2492)"
+                )
+            else:
+                click.echo(
+                    f"  Warning: {_wrap_settings_path} has "
+                    f"{_TOOL_SEARCH_ENV}={_settings_tool_search!r} while the "
+                    f"launched process uses {_resolved_tool_search!r}. Daemon "
+                    "workers read the settings file; pass --tool-search to "
+                    "reconcile (issue #2492)."
+                )
+        if _should_persist_tool_search_settings(
+            flag_value=tool_search, resolved_value=_resolved_tool_search
+        ):
+            if _resolved_tool_search is None or not _resolved_tool_search.strip():
+                raise click.ClickException(
+                    f"internal error: cannot persist empty {_TOOL_SEARCH_ENV} to settings"
+                )
+            _written_tool_search[0] = _resolved_tool_search.strip()
+            _saved_tool_search[0] = _write_claude_wrap_tool_search(
+                _written_tool_search[0],
+                settings_path=_wrap_settings_path,
+            )
+            _persisted_tool_search[0] = True
+            click.echo(
+                f"  Wrote {_TOOL_SEARCH_ENV}={_resolved_tool_search.strip()} "
+                f"to {_wrap_settings_path} for daemon workers (issue #2492)"
             )
 
         # Issue #1158: opt-in 1M context window. Claude Code only sends the
@@ -4783,6 +5001,12 @@ def claude(
         click.echo(f"  Error: {e}")
         raise SystemExit(1) from e
     finally:
+        if _persisted_tool_search[0] and _written_tool_search[0] is not None:
+            _restore_claude_wrap_tool_search(
+                _saved_tool_search[0],
+                written=_written_tool_search[0],
+                settings_path=_wrap_settings_path,
+            )
         _restore_claude_wrap_base_url(
             _saved_base_url[0],
             foundry_mode=_settings_foundry[0],
