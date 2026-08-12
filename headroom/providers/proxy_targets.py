@@ -31,6 +31,14 @@ def vertex_target_for_location(proxy: Any, location: str) -> str:
 
 def select_passthrough_base_url(proxy: Any, headers: Mapping[str, str]) -> str:
     """Resolve the upstream base URL for catch-all proxy passthrough requests."""
+    # AugmentCode Auggie mode: this proxy instance is dedicated to one Auggie
+    # session and every Auggie tenant REST call (get-models, list-remote-tools,
+    # settings/get-mcp-*-configs, find-missing, ...) must reach the tenant. Only
+    # set for `headroom wrap auggie`. (The inference `/chat-stream` call has its
+    # own explicitly-registered route for telemetry tagging.)
+    augment_api_url = getattr(getattr(proxy, "config", None), "augment_api_url", None)
+    if augment_api_url:
+        return str(augment_api_url).rstrip("/")
     routing = resolve_codex_routing(headers)
     if routing.is_chatgpt_auth:
         return CHATGPT_BACKEND_API_URL
