@@ -4,6 +4,7 @@ Usage:
     headroom wrap claude                    # Start proxy + claude
     headroom wrap copilot -- --model ...    # Start proxy + launch GitHub Copilot CLI
     headroom wrap vscode                    # Transparently proxy VS Code Copilot
+    headroom wrap vscode-claude             # Transparently proxy VS Code Claude Code
     headroom wrap codex                     # Start proxy + OpenAI Codex CLI
     headroom wrap aider                     # Start proxy + aider
     headroom wrap openclaude                # Start proxy + OpenClaude
@@ -73,15 +74,20 @@ from headroom.providers.claude import (
     REMOTE_CONTROL_BASE_URL_ENV,
     TOOL_SEARCH_DEFAULT,
     TOOL_SEARCH_ENV,
+    claude_user_settings_path,
+    configure_vscode_claude_settings,
     detect_claude_code_version,
     remote_control_applies_to_auth,
     remote_control_gate_active,
     remote_control_gate_message,
     remote_control_sibling_gate_note,
+    remove_vscode_claude_settings,
+    vscode_claude_proxy_url,
 )
 from headroom.providers.claude import (
     proxy_base_url as _claude_proxy_base_url,
 )
+from headroom.providers.claude.runtime import TOOL_SEARCH_FOUNDRY_DEFAULT
 from headroom.providers.codex import build_launch_env as _build_codex_launch_env
 from headroom.providers.codex.install import codex_uses_chatgpt_auth
 from headroom.providers.codex.threads import retag_to_headroom, retag_to_native
@@ -264,13 +270,14 @@ _WRAP_PROXY_TIMEOUT_ML_MODULES = ("torch", "sentence_transformers", "spacy")
 # Issue #746: Claude Code disables on-demand tool loading (deferral) when
 # ANTHROPIC_BASE_URL is a custom host and ENABLE_TOOL_SEARCH is unset, which
 # inflates the local context window by tens of K tokens. Setting the env var
-# when we launch Claude Code keeps deferral on. Default to "true" — defer the
-# MCP/system tools for maximum context savings, matching native first-party
-# behaviour (core built-ins like Read/Edit/Bash are never deferred by Claude
-# Code, so the agent loop is unaffected). The key/default are shared with
-# `init` and `install` via the Claude provider package to prevent drift.
+# when we launch Claude Code keeps deferral on. The generic default stays
+# "true" for non-Foundry sessions, while Foundry uses a dedicated compatibility
+# default of "false" because its upstream does not support the deferred-tool
+# shape. The key/defaults are shared with `init` and `install` via the Claude
+# provider package to prevent drift.
 _TOOL_SEARCH_ENV = TOOL_SEARCH_ENV
 _TOOL_SEARCH_DEFAULT = TOOL_SEARCH_DEFAULT
+_TOOL_SEARCH_FOUNDRY_DEFAULT = TOOL_SEARCH_FOUNDRY_DEFAULT
 _AGENT_SAVINGS_WRAP_AGENTS = {"claude", "codex", "cursor", "grok", "grok_build"}
 
 # 1M context window for `wrap claude` (#1158). Claude Code only sends the
@@ -296,6 +303,33 @@ def _resolve_1m_model(current: str | None) -> str:
     """
     base = (current or "").strip() or _DEFAULT_1M_MODEL
     return base if base.endswith(_CONTEXT_1M_SUFFIX) else f"{base}{_CONTEXT_1M_SUFFIX}"
+
+
+def _apply_1m_to_claude_args(args: tuple[str, ...]) -> tuple[tuple[str, ...], str | None]:
+    """Add the ``[1m]`` suffix to an explicit ``--model`` in pass-through args.
+
+    Claude Code gives the ``--model`` CLI flag precedence over the
+    ``ANTHROPIC_MODEL`` env var, so when a user passes both ``--1m`` and
+    ``--model X`` the env-var suffix is silently shadowed and the session caps at
+    200k (#2915). Rewriting the flag's value the same way ``_resolve_1m_model``
+    rewrites the env var keeps ``--1m`` effective on the higher-precedence flag.
+
+    Handles ``--model VALUE`` and ``--model=VALUE`` (the first occurrence only, as
+    Claude Code honours the first). Idempotent via ``_resolve_1m_model``. Returns
+    ``(new_args, rewritten_value)``; ``rewritten_value`` is ``None`` when no
+    ``--model`` was present (the env-var path already covers that case).
+    """
+    out = list(args)
+    for i, arg in enumerate(out):
+        if arg == "--model" and i + 1 < len(out):
+            rewritten = _resolve_1m_model(out[i + 1])
+            out[i + 1] = rewritten
+            return tuple(out), rewritten
+        if arg.startswith("--model="):
+            rewritten = _resolve_1m_model(arg.split("=", 1)[1])
+            out[i] = f"--model={rewritten}"
+            return tuple(out), rewritten
+    return tuple(out), None
 
 
 def _normalize_tool_search_mode(value: str) -> str:
@@ -326,7 +360,8 @@ def _configure_tool_search_env(env: dict[str, str], flag_value: str | None) -> s
     1. explicit ``--tool-search`` flag — wins (the user asked for it on the CLI),
     2. a pre-existing ``ENABLE_TOOL_SEARCH`` in the environment — respected and
        left untouched (the user's own Claude Code knob),
-    3. the built-in default (``true``).
+    3. the built-in mode-specific default (``true`` normally, ``false`` on
+       Foundry).
 
     Returns the value written, or ``None`` when an existing environment value
     was deliberately left in place.
@@ -341,8 +376,11 @@ def _configure_tool_search_env(env: dict[str, str], flag_value: str | None) -> s
     existing = env.get(_TOOL_SEARCH_ENV)
     if existing is not None and existing.strip():
         return None
-    env[_TOOL_SEARCH_ENV] = _TOOL_SEARCH_DEFAULT
-    return _TOOL_SEARCH_DEFAULT
+    default = (
+        _TOOL_SEARCH_FOUNDRY_DEFAULT if env.get("CLAUDE_CODE_USE_FOUNDRY") else _TOOL_SEARCH_DEFAULT
+    )
+    env[_TOOL_SEARCH_ENV] = default
+    return default
 
 
 # ENABLE_TOOL_SEARCH modes that turn deferral OFF. Everything else Claude Code
@@ -624,6 +662,15 @@ def _start_proxy(
     proxy_env = os.environ.copy()
     _scrub_copilot_proxy_seed_env(proxy_env)
     proxy_env["PYTHONIOENCODING"] = "utf-8"
+    # `python -m headroom.cli` prepends the launch cwd to sys.path, so running
+    # `wrap` from a directory that contains a `headroom/` folder (most commonly a
+    # clone of this repo, whose package lives at <root>/headroom/) shadows the
+    # installed wheel with the raw source tree, which has no compiled
+    # `headroom._core`. The proxy then dies with "No module named 'headroom._core'"
+    # and wrap silently falls back to launching the client unwrapped (#2793).
+    # PYTHONSAFEPATH disables that cwd prepend (Python 3.11+; a harmless no-op on
+    # 3.10) so the subprocess always resolves the installed package.
+    proxy_env["PYTHONSAFEPATH"] = "1"
     # Vertex AI RST_STREAMs HTTP/2 connections (error_code:2). Force HTTP/1.1
     # when wrapping a Vertex-mode client so upstream requests succeed.
     if os.environ.get("CLAUDE_CODE_USE_VERTEX") or os.environ.get("ANTHROPIC_VERTEX_PROJECT_ID"):
@@ -1696,8 +1743,10 @@ def _index_serena_project(*, verbose: bool = False) -> None:
         result = run(
             [
                 "uvx",
+                # PyPI (prebuilt wheels), not the git source that fails to build
+                # under proot-based filesystems (#2871).
                 "--from",
-                "git+https://github.com/oraios/serena",
+                "serena-agent",
                 "serena",
                 "project",
                 "index",
@@ -2726,6 +2775,12 @@ def _run_proxy_only_watcher(
 
     signal.signal(signal.SIGINT, _signal_shutdown)
     signal.signal(signal.SIGTERM, _signal_shutdown)
+    # Windows exposes Ctrl+Break as SIGBREAK rather than SIGINT. Test runners,
+    # IDE terminals, and process supervisors commonly use Ctrl+Break to target
+    # a newly created process group, so route it through the same graceful
+    # cleanup path as an interactive Ctrl+C.
+    if sys.platform == "win32" and hasattr(signal, "SIGBREAK"):
+        signal.signal(signal.SIGBREAK, _signal_shutdown)
 
     try:
         _print_wrap_banner(agent_label)
@@ -3935,15 +3990,28 @@ def _make_cleanup(proxy_proc_holder: list, port: int | list[int] = 8787) -> Any:
         p = port[0] if isinstance(port, list) else port
         _unregister_proxy_client(p)
         proc = proxy_proc_holder[0] if proxy_proc_holder else None
-        if proc and proc.poll() is None:
+        if proc:
             if _other_clients_exist():
                 # Other clients still using the proxy — leave it running.
                 return
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+            # On Windows the proxy launcher can exit while its detached
+            # serving child remains alive (the native runtime uses a child
+            # process).  The detachment is intentional so an ungraceful
+            # terminal close cannot disrupt other wrappers, but a graceful
+            # Ctrl+C from the last wrapper must still stop the listener.
+            if sys.platform == "win32" and _check_proxy(p):
+                stop_status = _stop_local_proxy_for_unwrap(p)
+                if stop_status not in {"stopped", "not_running"}:
+                    click.echo(
+                        f"  Warning: proxy on port {p} remained running "
+                        f"after shutdown ({stop_status})."
+                    )
 
     return cleanup
 
@@ -4250,6 +4318,7 @@ def wrap(ctx: click.Context) -> None:
         headroom wrap codex               # OpenAI Codex CLI
         headroom wrap copilot -- --model claude-sonnet-4-20250514
         headroom wrap vscode             # VS Code Copilot (preserves model picker)
+        headroom wrap vscode-claude      # VS Code Claude Code extension
         headroom wrap aider               # Aider
         headroom wrap openclaude          # OpenClaude
         headroom wrap vibe                # Mistral Vibe
@@ -4692,10 +4761,18 @@ def claude(
         # force it via ANTHROPIC_MODEL on the launched process.
         if context_1m:
             env[_ANTHROPIC_MODEL_ENV] = _resolve_1m_model(env.get(_ANTHROPIC_MODEL_ENV))
-            click.echo(
-                f"  {_ANTHROPIC_MODEL_ENV}={env[_ANTHROPIC_MODEL_ENV]} "
-                "(1M context window; issue #1158)"
-            )
+            # An explicit pass-through --model outranks ANTHROPIC_MODEL in Claude
+            # Code, so add the suffix there too or the env var is silently
+            # shadowed and the window stays 200k (#2915). Report what will
+            # actually take effect rather than the shadowed env value.
+            claude_args, _model_flag_1m = _apply_1m_to_claude_args(claude_args)
+            if _model_flag_1m is not None:
+                click.echo(f"  --model {_model_flag_1m} (1M context window; issue #1158)")
+            else:
+                click.echo(
+                    f"  {_ANTHROPIC_MODEL_ENV}={env[_ANTHROPIC_MODEL_ENV]} "
+                    "(1M context window; issue #1158)"
+                )
 
         result = subprocess.run([claude_bin, *claude_args], env=env)
         raise SystemExit(result.returncode)
@@ -5019,8 +5096,11 @@ def copilot(
                 "automatic model selection."
             )
 
+        env_wire_api = env.get("COPILOT_PROVIDER_WIRE_API")
         effective_wire_api = wire_api or (
-            _copilot_default_wire_api_for_model(selected_model) if subscription else "completions"
+            env_wire_api
+            if env_wire_api in {"completions", "responses"}
+            else _copilot_default_wire_api_for_model(selected_model)
         )
         env["COPILOT_PROVIDER_TYPE"] = "openai"
         # Per-project savings: the Copilot CLI cannot send custom headers, so
@@ -5211,6 +5291,86 @@ def unwrap_vscode_copilot(settings_file: Path | None) -> None:
         click.echo(f"Removed Headroom Copilot proxy settings from {target_settings}")
     else:
         click.echo(f"No Headroom Copilot proxy settings found in {target_settings}")
+
+
+# =============================================================================
+# Claude Code for VS Code
+# =============================================================================
+
+
+@wrap.command("vscode-claude")
+@click.option("--port", "-p", default=8787, type=click.IntRange(1, 65535), help="Proxy port")
+@click.option("--memory", is_flag=True, help="Enable persistent cross-session memory")
+@click.option(
+    "--settings-file",
+    type=click.Path(path_type=Path, dir_okay=False),
+    default=None,
+    help="Override Claude Code user settings.json path",
+)
+@click.option(
+    "--configure/--no-configure",
+    default=True,
+    help="Safely add/update Claude Code's proxy environment settings",
+)
+def vscode_claude(
+    port: int,
+    memory: bool,
+    settings_file: Path | None,
+    configure: bool,
+) -> None:
+    """Route VS Code's official Claude Code extension through Headroom.
+
+    Run this from your project, reload VS Code after first setup, and keep this
+    command running while using Claude Code. Authentication and model selection
+    remain unchanged. Run `headroom unwrap vscode-claude` to restore settings.
+    """
+    target_settings = settings_file or claude_user_settings_path()
+
+    def _print_setup(actual_port: int) -> None:
+        proxy_url = vscode_claude_proxy_url(actual_port, _project_name_from_cwd())
+        if configure:
+            action = configure_vscode_claude_settings(target_settings, proxy_url)
+            click.echo(f"  VS Code Claude Code proxy settings {action}: {target_settings}")
+            click.echo("  Next: Reload VS Code, then use the Claude Code panel.")
+            click.echo("  Keep this command running. Press Ctrl+C to stop the proxy.")
+            click.echo("  Authentication and the selected Claude model are preserved.")
+            click.echo("  Undo later with: headroom unwrap vscode-claude")
+            click.echo("  Guide: https://headroom-docs.vercel.app/docs/vscode-claude-code")
+            return
+        click.echo(f"  Add these values under 'env' in {target_settings}:")
+        click.echo(f'  "ANTHROPIC_BASE_URL": "{proxy_url}",')
+        click.echo(f'  "{_TOOL_SEARCH_ENV}": "{_TOOL_SEARCH_DEFAULT}"')
+
+    _run_proxy_only_watcher(
+        agent_label="VS CODE CLAUDE",
+        port=port,
+        no_proxy=False,
+        learn=False,
+        memory=memory,
+        agent_type="claude",
+        print_setup_lines=_print_setup,
+    )
+
+
+@unwrap.command("vscode-claude")
+@click.option(
+    "--settings-file",
+    type=click.Path(path_type=Path, dir_okay=False),
+    default=None,
+    help="Override Claude Code user settings.json path",
+)
+def unwrap_vscode_claude(settings_file: Path | None) -> None:
+    """Restore settings saved by `headroom wrap vscode-claude`.
+
+    Reload the VS Code window afterward. If setup used --settings-file, pass the
+    same path here.
+    """
+    target_settings = settings_file or claude_user_settings_path()
+    if remove_vscode_claude_settings(target_settings):
+        click.echo(f"Restored Claude Code settings in {target_settings}")
+        click.echo("Reload the VS Code window to apply the restored settings.")
+    else:
+        click.echo(f"No Headroom VS Code Claude settings found for {target_settings}")
 
 
 # =============================================================================
@@ -6831,6 +6991,20 @@ def opencode(
             )
         subscription_resolution = _require_copilot_subscription_resolution()
 
+    # Verify the opencode binary exists BEFORE mutating any config. Otherwise a
+    # missing binary leaves headroom MCP/Serena/memory entries in the user's
+    # opencode config and an injected AGENTS.md, then errors with no cleanup --
+    # the config-before-verify anti-pattern (#1614). Siblings (claude, codex,
+    # goose, omp) already check first. `--prepare-only` intentionally writes
+    # config without launching, so it is exempt.
+    opencode_bin: str | None = None
+    if not prepare_only:
+        opencode_bin = shutil.which("opencode")
+        if not opencode_bin:
+            click.echo("Error: 'opencode' not found in PATH.")
+            click.echo("Install OpenCode: https://opencode.ai")
+            raise SystemExit(1)
+
     # Snapshot OpenCode config.json BEFORE any wrap-time mutation so
     # `headroom unwrap opencode` can restore the user's pre-wrap state.
     _opencode_config_file, _opencode_backup_file = opencode_config_paths()
@@ -6871,11 +7045,9 @@ def opencode(
         inject_opencode_provider_config(port)
         return
 
-    opencode_bin = shutil.which("opencode")
-    if not opencode_bin:
-        click.echo("Error: 'opencode' not found in PATH.")
-        click.echo("Install OpenCode: https://opencode.ai")
-        raise SystemExit(1)
+    # Past the prepare-only return the launch path always ran the binary check
+    # above, so opencode_bin is resolved.
+    assert opencode_bin is not None
 
     # Register our proxy client marker BEFORE _ensure_proxy so that another
     # wrapper's cleanup sees us as an active client and doesn't terminate a

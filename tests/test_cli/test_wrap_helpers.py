@@ -110,6 +110,35 @@ def test_wrap_claude_allows_claude_print_short_flag_in_passthrough_args() -> Non
 
 
 # ---------------------------------------------------------------------------
+# _apply_1m_to_claude_args — add the [1m] suffix to an explicit pass-through
+# --model so it survives Claude Code's CLI-over-env precedence (#2915).
+# ---------------------------------------------------------------------------
+def test_apply_1m_rewrites_model_flag_value() -> None:
+    args, rewritten = wrap_mod._apply_1m_to_claude_args(("--model", "opusplan"))
+    assert args == ("--model", "opusplan[1m]")
+    assert rewritten == "opusplan[1m]"
+
+
+def test_apply_1m_rewrites_equals_model_flag() -> None:
+    args, rewritten = wrap_mod._apply_1m_to_claude_args(("--model=opusplan",))
+    assert args == ("--model=opusplan[1m]",)
+    assert rewritten == "opusplan[1m]"
+
+
+def test_apply_1m_is_idempotent_on_already_suffixed_model() -> None:
+    args, rewritten = wrap_mod._apply_1m_to_claude_args(("--model", "opusplan[1m]"))
+    assert args == ("--model", "opusplan[1m]")
+    assert rewritten == "opusplan[1m]"
+
+
+def test_apply_1m_noop_without_model_flag() -> None:
+    original = ("--permission-mode", "auto", "--resume")
+    args, rewritten = wrap_mod._apply_1m_to_claude_args(original)
+    assert args == original
+    assert rewritten is None
+
+
+# ---------------------------------------------------------------------------
 # _run_proxy_only_watcher — must print banner, call setup callback, install
 # signal handlers, and clean up. Heavily mocked since the real watcher
 # blocks on `time.sleep` indefinitely.
@@ -213,7 +242,7 @@ def test_run_proxy_only_watcher_keyboardinterrupt_shuts_down_cleanly(
 def test_run_proxy_only_watcher_signal_handler_uses_clean_shutdown(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The installed SIGINT handler must not misreport its own proxy stop as a crash."""
+    """Windows console stop handlers must use the clean shutdown path."""
 
     handlers: dict[int, Any] = {}
     cleanup_calls = {"n": 0}
@@ -235,6 +264,9 @@ def test_run_proxy_only_watcher_signal_handler_uses_clean_shutdown(
     monkeypatch.setattr(wrap_mod.time, "sleep", trigger_sigint)
     monkeypatch.setattr(wrap_mod, "_make_cleanup", lambda holder, port: cleanup)
     monkeypatch.setattr(wrap_mod.signal, "signal", capture_handler)
+    monkeypatch.setattr(wrap_mod.sys, "platform", "win32")
+    sigbreak = 999
+    monkeypatch.setattr(wrap_mod.signal, "SIGBREAK", sigbreak, raising=False)
 
     runner = CliRunner()
 
@@ -254,6 +286,7 @@ def test_run_proxy_only_watcher_signal_handler_uses_clean_shutdown(
     assert inv.exit_code == 0, inv.output
     assert "Shutting down..." in inv.output
     assert "Proxy process exited unexpectedly" not in inv.output
+    assert sigbreak in handlers
     assert cleanup_calls["n"] >= 2  # signal handler plus finally (idempotent)
 
 
@@ -537,6 +570,27 @@ class TestProxyClientRefCounting:
         assert proc.terminated is True
         # Our own marker is removed before we count.
         assert wrap_mod._live_proxy_clients(self.PORT, exclude_self=False) == []
+
+    def test_cleanup_stops_detached_windows_serving_child(
+        self, clients_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Ctrl+C must stop the listener even when its launcher already exited."""
+        wrap_mod._register_proxy_client(self.PORT)
+        proc = _FakeProxyProc()
+        proc.poll = lambda: 0  # type: ignore[method-assign]
+        stopped: list[int] = []
+        monkeypatch.setattr(wrap_mod.sys, "platform", "win32")
+        monkeypatch.setattr(wrap_mod, "_check_proxy", lambda port: port == self.PORT)
+        monkeypatch.setattr(
+            wrap_mod,
+            "_stop_local_proxy_for_unwrap",
+            lambda port: stopped.append(port) or "stopped",
+        )
+
+        wrap_mod._make_cleanup([proc], self.PORT)()
+
+        assert not proc.terminated
+        assert stopped == [self.PORT]
 
     def test_cleanup_leaves_proxy_running_when_other_client_alive(self, clients_dir: Path) -> None:
         """A second live client (here: the test's parent) keeps the proxy up."""
