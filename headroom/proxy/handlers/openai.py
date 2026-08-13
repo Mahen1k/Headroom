@@ -2881,7 +2881,9 @@ class OpenAIHandlerMixin:
             COMPRESSION_TIMEOUT_SECONDS,
             MAX_MESSAGE_ARRAY_LENGTH,
             MAX_REQUEST_BODY_SIZE,
+            RequestBodyTooLarge,
             _read_request_json,
+            get_body_too_large_status,
         )
         from headroom.proxy.modes import is_cache_mode, is_token_mode
         from headroom.utils import extract_user_query
@@ -2914,6 +2916,17 @@ class OpenAIHandlerMixin:
         # Parse request
         try:
             body = await _read_request_json(request)
+        except RequestBodyTooLarge as e:
+            return JSONResponse(
+                status_code=get_body_too_large_status(),
+                content={
+                    "error": {
+                        "message": f"{e!s}",
+                        "type": "invalid_request_error",
+                        "code": "request_too_large",
+                    }
+                },
+            )
         except (json.JSONDecodeError, ValueError) as e:
             return JSONResponse(
                 status_code=400,
@@ -4874,6 +4887,8 @@ class OpenAIHandlerMixin:
         from headroom.proxy.body_forwarding import BodyMutationTracker
         from headroom.proxy.helpers import (
             MAX_REQUEST_BODY_SIZE,
+            RequestBodyTooLarge,
+            get_body_too_large_status,
             read_request_json_with_bytes,
         )
         from headroom.utils import extract_user_query
@@ -4910,6 +4925,17 @@ class OpenAIHandlerMixin:
         # (#1542); byte-faithful passthrough avoids that.
         try:
             body, original_body_bytes = await read_request_json_with_bytes(request)
+        except RequestBodyTooLarge as e:
+            return JSONResponse(
+                status_code=get_body_too_large_status(),
+                content={
+                    "error": {
+                        "message": f"{e!s}",
+                        "type": "invalid_request_error",
+                        "code": "request_too_large",
+                    }
+                },
+            )
         except (json.JSONDecodeError, ValueError) as e:
             return JSONResponse(
                 status_code=400,
@@ -8997,12 +9023,27 @@ class OpenAIHandlerMixin:
         """
         from fastapi.responses import JSONResponse
 
-        from headroom.proxy.helpers import _read_request_json
+        from headroom.proxy.helpers import (
+            RequestBodyTooLarge,
+            _read_request_json,
+            get_body_too_large_status,
+        )
 
         # Check bypass header
         if request.headers.get("x-headroom-bypass", "").lower() == "true":
             try:
                 body = await _read_request_json(request)
+            except RequestBodyTooLarge as e:
+                return JSONResponse(
+                    status_code=get_body_too_large_status(),
+                    content={
+                        "error": {
+                            "message": f"{e!s}",
+                            "type": "invalid_request_error",
+                            "code": "request_too_large",
+                        }
+                    },
+                )
             except (json.JSONDecodeError, ValueError) as e:
                 return JSONResponse(
                     status_code=400,
@@ -9023,6 +9064,16 @@ class OpenAIHandlerMixin:
 
         try:
             body = await _read_request_json(request)
+        except RequestBodyTooLarge:
+            return JSONResponse(
+                status_code=get_body_too_large_status(),
+                content={
+                    "error": {
+                        "type": "invalid_request",
+                        "message": "Request body too large.",
+                    }
+                },
+            )
         except Exception:
             return JSONResponse(
                 status_code=400,
