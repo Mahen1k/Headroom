@@ -46,6 +46,20 @@ def _make_proxy():  # noqa: ANN202 — returns the internal HeadroomProxy
     return app.state.proxy
 
 
+def _quarantine_compression(proxy) -> None:  # noqa: ANN001 — internal HeadroomProxy
+    """Put the shared compression executor into the quarantined state.
+
+    Mirrors what a real compression timeout records: the timeout-debt counter
+    *and* the time-cap deadline (#2360). Setting only the counter leaves the
+    deadline at 0.0, which the guard reads as "cap already lapsed, resume
+    compression" — so no quarantine fires.
+    """
+    proxy._compression_timed_out_in_flight = 1
+    proxy._compression_quarantine_deadline = (
+        time.monotonic() + proxy._compression_quarantine_max_seconds
+    )
+
+
 def test_handlers_offload_token_counting_and_batch_apply() -> None:
     """Wiring guard: the request paths must use the offloaded helpers, not inline
     get_tokenizer/count_messages or pipeline.apply on the event loop."""
@@ -180,8 +194,7 @@ async def test_count_tokens_offloaded_fails_open_on_executor_quarantine() -> Non
     # quarantine became time-capped (#2412), standing debt alone no longer
     # quarantines: the deadline armed by the fresh timeout must still be in
     # the future, so arm it the way a real timeout would.
-    proxy._compression_timed_out_in_flight = 1
-    proxy._compression_quarantine_deadline = time.monotonic() + 60.0
+    _quarantine_compression(proxy)
 
     tokenizer, tokens = await proxy._count_tokens_offloaded(
         "qwen2.5-coder", [{"role": "user", "content": "hello world"}]
@@ -199,8 +212,7 @@ async def test_count_tokens_offloaded_returns_count_text_capable_tokenizer() -> 
     # Quarantine forces the fail-open branch (an EstimatingTokenCounter).
     # Post-#2412 the quarantine is time-capped, so the deadline must be armed
     # alongside the standing debt.
-    proxy._compression_timed_out_in_flight = 1
-    proxy._compression_quarantine_deadline = time.monotonic() + 60.0
+    _quarantine_compression(proxy)
 
     # The empty-messages count is intentionally discarded by that handler
     # (it sums text parts itself), so only the tokenizer matters here.

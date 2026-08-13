@@ -51,6 +51,9 @@ class RequestOutcome:
     """
 
     # ── Identity ──────────────────────────────────────────────────────
+    # request_id: unique per emission — it becomes the RequestLog key the
+    #     dashboard feed renders with (Alpine ``:key``), so duplicates blank
+    #     the whole table (#310/#2164).
     request_id: str
     provider: str
     model: str
