@@ -401,6 +401,7 @@ def _normalize_history_entry(entry: Any) -> dict[str, Any] | None:
     total_input_tokens = 0
     total_input_cost_usd = 0.0
     output_tokens_saved = 0
+    output_tokens = 0
     output_savings_usd = 0.0
     provider = PROVIDER_UNKNOWN
     model = MODEL_UNKNOWN
@@ -417,6 +418,7 @@ def _normalize_history_entry(entry: Any) -> dict[str, Any] | None:
         total_input_tokens = _coerce_int(entry.get("total_input_tokens"))
         total_input_cost_usd = _coerce_float(entry.get("total_input_cost_usd"))
         output_tokens_saved = _coerce_int(entry.get("output_tokens_saved"))
+        output_tokens = _coerce_int(entry.get("output_tokens"))
         output_savings_usd = _coerce_float(entry.get("output_savings_usd"))
         provider = _normalize_provider(entry.get("provider"))
         model = _normalize_model(entry.get("model"))
@@ -446,6 +448,7 @@ def _normalize_history_entry(entry: Any) -> dict[str, Any] | None:
         "total_input_tokens": total_input_tokens,
         "total_input_cost_usd": round(total_input_cost_usd, 6),
         "output_tokens_saved": output_tokens_saved,
+        "output_tokens": output_tokens,
         "output_savings_usd": round(output_savings_usd, 6),
     }
 
@@ -710,6 +713,7 @@ class SavingsTracker:
         input_tokens: int,
         tokens_saved: int,
         output_tokens_saved: int = 0,
+        output_tokens: int = 0,
         provider: str | None = None,
         project: str | None = None,
         cache_read_tokens: int = 0,
@@ -734,6 +738,7 @@ class SavingsTracker:
         delta_input_tokens = _coerce_int(input_tokens)
         delta_savings_usd = _estimate_compression_savings_usd(model, delta_tokens_saved)
         delta_output_tokens_saved = max(_coerce_int(output_tokens_saved), 0)
+        delta_output_tokens = max(_coerce_int(output_tokens), 0)
         delta_output_savings_usd = _estimate_output_savings_usd(model, delta_output_tokens_saved)
         delta_cache_read_tokens = _coerce_int(cache_read_tokens)
         delta_cache_savings_usd = _estimate_cache_savings_usd(model, delta_cache_read_tokens)
@@ -796,6 +801,12 @@ class SavingsTracker:
                 lifetime.get("output_savings_usd", 0.0) + delta_output_savings_usd,
                 6,
             )
+            # Actual output tokens emitted (not saved): the cumulative the
+            # history checkpoints need so a per-bucket output-reduction rate
+            # (saved / (saved + actual)) can be diffed out of consecutive
+            # checkpoints, exactly like cache_read_tokens. Lazy key, same
+            # legacy-tolerant shape as output_tokens_saved above.
+            lifetime["output_tokens"] = lifetime.get("output_tokens", 0) + delta_output_tokens
 
             session = self._state["display_session"]
             last_activity = _parse_timestamp(session.get("last_activity_at"))
@@ -856,11 +867,17 @@ class SavingsTracker:
             # not lossy-compressed, to keep Bedrock's prompt cache warm. Gating
             # on tokens_saved alone silently dropped every history point on
             # those requests even though real cache-read savings occurred.
-            # Append whenever any savings mechanism produced a saving.
+            # Append whenever any savings mechanism produced a saving. Actual
+            # output activity must also emit: consumers derive per-bucket
+            # output-reduction rates by diffing consecutive checkpoints, so an
+            # output-only request that only bumped lifetime["output_tokens"]
+            # would otherwise be invisible to the window it lands in and
+            # overstate the reduction rate.
             if (
                 delta_tokens_saved > 0
                 or delta_cache_read_tokens > 0
                 or delta_output_tokens_saved > 0
+                or delta_output_tokens > 0
             ):
                 self._state["history"].append(
                     {
@@ -874,6 +891,7 @@ class SavingsTracker:
                         "total_input_tokens": lifetime["total_input_tokens"],
                         "total_input_cost_usd": lifetime["total_input_cost_usd"],
                         "output_tokens_saved": lifetime.get("output_tokens_saved", 0),
+                        "output_tokens": lifetime.get("output_tokens", 0),
                         "output_savings_usd": lifetime.get("output_savings_usd", 0.0),
                     }
                 )
