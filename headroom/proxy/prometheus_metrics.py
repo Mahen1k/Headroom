@@ -884,6 +884,7 @@ class PrometheusMetrics:
                 input_tokens=input_tokens,
                 tokens_saved=tokens_saved,
                 provider=provider,
+                agent=client,
                 project=project,
                 cache_read_tokens=cache_read_tokens,
                 cache_write_tokens=cache_write_tokens,
