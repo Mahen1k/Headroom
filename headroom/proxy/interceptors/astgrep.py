@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -88,6 +89,24 @@ _PATTERNS: dict[str, list[str]] = {
 
 OUTLINE_MARKER = "    # ... (body elided by Headroom; Read a specific line range to see it)\n"
 
+# Matches a line-based truncation notice emitted by a client
+# when its own token cap cuts a Read result short, e.g. "showing lines 1-1489
+# of 1825 total". Captures the client-provided line counts that Headroom can
+# safely report without guessing. Tolerates common formatting variations
+_TRUNCATION_RE = re.compile(
+    r"showing\s+lines?\s+\d+\s*[-–]\s*(?P<end_line>\d+)\s+of\s+(?P<total_lines>\d+)\s+total",
+    re.IGNORECASE,
+)
+
+
+def _detect_truncation(source: str) -> tuple[int, int] | None:
+    """Return (end_line, total_lines) if `source` carries an upstream truncation
+    banner, else None."""
+    m = _TRUNCATION_RE.search(source)
+    if not m:
+        return None
+    return int(m.group("end_line")), int(m.group("total_lines"))
+
 
 class AstGrepReadOutline:
     """Interceptor that outlines verbose code-file Read outputs."""
@@ -131,7 +150,8 @@ class AstGrepReadOutline:
         if not matches:
             return None
 
-        outline = _build_outline(matches, tool_output)
+        truncation = _detect_truncation(tool_output)
+        outline = _build_outline(matches, tool_output, truncation)
         return outline if outline else None
 
     def progressive_disclosure_key(
@@ -258,12 +278,21 @@ def _run_ast_grep(
     return all_matches
 
 
-def _build_outline(matches: list[dict[str, Any]], source: str) -> str | None:
+def _build_outline(
+    matches: list[dict[str, Any]],
+    source: str,
+    truncation: tuple[int, int] | None = None,
+) -> str | None:
     """Build a compact outline from ast-grep matches.
 
     Emits each definition's signature line + docstring (if next line is a
     string literal) + an elision marker. Matches are sorted by byte offset
     so the outline tracks the original file order.
+
+    `truncation`, if given, is (end_line, total_lines) from an upstream
+    truncation banner already present in `source` (e.g. a client's own Read
+    token-cap notice). When set, the header states that the input was a
+    partial view instead of implying `source` is the whole file.
     """
     lines = source.splitlines(keepends=True)
     outline_chunks: list[str] = []
@@ -292,11 +321,21 @@ def _build_outline(matches: list[dict[str, Any]], source: str) -> str | None:
 
     if not outline_chunks:
         return None
-    header = (
-        "[headroom: outlined by ast-grep — "
-        f"{len(seen_starts)} definition(s); "
-        "bodies elided. Re-read the file with a line range to see a specific body.]\n"
-    )
+
+    if truncation:
+        end_line, total_lines = truncation
+        header = (
+            "[headroom: outlined by ast-grep — "
+            f"{len(seen_starts)} definition(s) in the visible portion; "
+            f"input was truncated upstream (showing through line {end_line} of {total_lines} total). "
+            "Bodies elided. Re-read remaining lines to see more.]\n"
+        )
+    else:
+        header = (
+            "[headroom: outlined by ast-grep — "
+            f"{len(seen_starts)} definition(s); "
+            "bodies elided. Re-read the file with a line range to see a specific body.]\n"
+        )
     return header + "".join(outline_chunks)
 
 
