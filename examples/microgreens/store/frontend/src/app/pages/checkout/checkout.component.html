@@ -1,33 +1,35 @@
-<section class="page">
-  <h1>Checkout</h1>
-
+<section class="page narrow">
   <div *ngIf="!completedOrder(); else confirmation">
-    <p *ngIf="error()" class="error">{{ error() }}</p>
+    <h1>Checkout</h1>
+    <div class="card">
+      <p *ngIf="error()" class="error">{{ error() }}</p>
 
-    <table>
-      <tbody>
-        <tr *ngFor="let item of items()">
-          <td>{{ item.variety | titlecase }}</td>
-          <td>{{ item.quantity }} tray(s)</td>
-          <td>{{ item.line_total | currency }}</td>
-        </tr>
-      </tbody>
-    </table>
-    <p class="total">Subtotal: {{ subtotal | currency }}</p>
+      <table>
+        <tbody>
+          <tr *ngFor="let item of items()">
+            <td>{{ item.variety | titlecase }}</td>
+            <td>{{ item.quantity }} tray(s)</td>
+            <td>{{ item.line_total | currency }}</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="total">Subtotal: {{ subtotal | currency }}</p>
 
-    <label>
-      Discount code
-      <input type="text" [(ngModel)]="discountCode" placeholder="e.g. FRESH10" />
-    </label>
-
-    <button (click)="placeOrder()">Place order</button>
+      <form (ngSubmit)="placeOrder()">
+        <label>
+          Discount code
+          <input type="text" [(ngModel)]="discountCode" name="discountCode" placeholder="e.g. FRESH10" />
+        </label>
+        <button type="submit" class="btn-primary">Place order</button>
+      </form>
+    </div>
   </div>
 
   <ng-template #confirmation>
     <div class="card">
-      <h2>Order #{{ completedOrder()!.id }} confirmed</h2>
+      <h1>✅ Order #{{ completedOrder()!.id }} confirmed</h1>
       <p>Subtotal: {{ completedOrder()!.subtotal | currency }}</p>
-      <p *ngIf="completedOrder()!.discount_code">
+      <p *ngIf="completedOrder()!.discount_code" class="success">
         Discount applied: {{ completedOrder()!.discount_code }}
       </p>
       <p class="total">Total charged: {{ completedOrder()!.total | currency }}</p>

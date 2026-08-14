@@ -19,13 +19,13 @@
           <td>{{ item.quantity }}</td>
           <td>{{ item.unit_price | currency }}</td>
           <td>{{ item.line_total | currency }}</td>
-          <td><button (click)="remove(item.id)">Remove</button></td>
+          <td><button class="btn-outline" (click)="remove(item.id)">Remove</button></td>
         </tr>
       </tbody>
     </table>
 
     <p class="total">Subtotal: {{ total | currency }}</p>
-    <button (click)="goToCheckout()">Proceed to checkout</button>
+    <button class="btn-primary" (click)="goToCheckout()">Proceed to checkout</button>
   </div>
 
   <ng-template #empty>

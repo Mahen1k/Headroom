@@ -11,6 +11,8 @@ import { AuthService } from './core/services/auth.service';
   styleUrl: './app.component.css',
 })
 export class AppComponent {
+  readonly currentYear = new Date().getFullYear();
+
   constructor(public auth: AuthService, private router: Router) {}
 
   logout(): void {

@@ -1,5 +1,5 @@
 <header class="site-header">
-  <a class="brand" routerLink="/">🌱 Microgreens Store</a>
+  <a class="brand" routerLink="/"><span class="brand-mark">🌱</span> Microgreens Co.</a>
   <nav>
     <a routerLink="/">Shop</a>
     <ng-container *ngIf="auth.isLoggedIn(); else guestLinks">
@@ -19,3 +19,31 @@
 <main>
   <router-outlet></router-outlet>
 </main>
+
+<footer class="site-footer">
+  <div class="footer-columns">
+    <div>
+      <h3>🌱 Microgreens Co.</h3>
+      <p>Farm-fresh microgreens, harvested to order and delivered fast. Grown in small,
+        quality-checked batches so every tray meets our grading standard before it ships.</p>
+    </div>
+    <div>
+      <h3>Shop</h3>
+      <ul>
+        <li><a routerLink="/">All microgreens</a></li>
+        <li><a routerLink="/orders">Track an order</a></li>
+      </ul>
+    </div>
+    <div>
+      <h3>Why us</h3>
+      <ul>
+        <li>Harvested fresh, same day</li>
+        <li>Graded for quality (A/B)</li>
+        <li>No pesticides, ever</li>
+      </ul>
+    </div>
+  </div>
+  <div class="footer-bottom">
+    &copy; {{ currentYear }} Microgreens Co. &middot; Example storefront, not a real business.
+  </div>
+</footer>
