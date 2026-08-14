@@ -1,0 +1,23 @@
+<section class="page">
+  <h1>Your Orders</h1>
+  <p *ngIf="error()" class="error">{{ error() }}</p>
+
+  <div *ngIf="orders().length; else empty">
+    <div class="card" *ngFor="let order of orders()">
+      <h2>Order #{{ order.id }}</h2>
+      <ul>
+        <li *ngFor="let item of order.items">
+          {{ item.quantity }} tray(s) of {{ item.variety | titlecase }} - {{ item.line_total | currency }}
+        </li>
+      </ul>
+      <p *ngIf="order.discount_code">Discount: {{ order.discount_code }}</p>
+      <p class="total">Total: {{ order.total | currency }}</p>
+    </div>
+  </div>
+
+  <ng-template #empty>
+    <div class="empty-state">
+      <p>You haven't placed any orders yet.</p>
+    </div>
+  </ng-template>
+</section>

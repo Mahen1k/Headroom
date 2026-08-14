@@ -1,0 +1,71 @@
+<section class="hero">
+  <h1>Farm-Fresh Microgreens, Delivered</h1>
+  <p>Harvested to order in small, quality-checked batches — every tray graded before it ships.</p>
+</section>
+
+<div class="trust-strip">
+  <span>🌿 Harvested fresh daily</span>
+  <span>🧪 Quality graded (A/B)</span>
+  <span>🚫 No pesticides</span>
+  <span>📦 Same-day dispatch</span>
+</div>
+
+<section class="page">
+  <div class="catalog-toolbar">
+    <div>
+      <h1>Shop Microgreens</h1>
+      <p class="result-count" *ngIf="products().length">
+        {{ products().length }} variet{{ products().length === 1 ? 'y' : 'ies' }} in stock
+      </p>
+    </div>
+    <label class="sort-select" *ngIf="products().length">
+      Sort by
+      <select [(ngModel)]="sortBy">
+        <option value="freshest">Freshest</option>
+        <option value="price-asc">Price: low to high</option>
+        <option value="price-desc">Price: high to low</option>
+      </select>
+    </label>
+  </div>
+
+  <p *ngIf="message()" class="success">{{ message() }}</p>
+  <p *ngIf="error()" class="error">{{ error() }}</p>
+
+  <div class="grid" *ngIf="sortedProducts().length; else empty">
+    <div class="product-card" *ngFor="let product of sortedProducts()">
+      <div class="product-media swatch-{{ product.variety }}">
+        {{ emojiFor(product.variety) }}
+        <span class="grade-pill" [class.grade-a]="product.grade === 'A'" [class.grade-b]="product.grade === 'B'">
+          Grade {{ product.grade }}
+        </span>
+        <span class="stock-pill">{{ product.quantity_trays }} left</span>
+      </div>
+
+      <div class="product-body">
+        <h2>{{ product.variety | titlecase }}</h2>
+        <p class="product-meta">Harvested {{ product.days_since_sowing }} days after sowing</p>
+        <p class="product-price">
+          {{ product.price_per_tray | currency }} <small>/ tray</small>
+        </p>
+
+        <div class="add-row">
+          <input
+            class="qty-input"
+            type="number"
+            min="1"
+            [max]="product.quantity_trays"
+            [value]="quantityFor(product.id)"
+            (input)="setQuantity(product.id, $any($event.target).value)"
+          />
+          <button (click)="addToCart(product)">Add to cart</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <ng-template #empty>
+    <div class="empty-state">
+      <p>No microgreens are ready to sell right now — check back soon.</p>
+    </div>
+  </ng-template>
+</section>

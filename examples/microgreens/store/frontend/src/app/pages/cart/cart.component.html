@@ -1,0 +1,34 @@
+<section class="page">
+  <h1>Your Cart</h1>
+  <p *ngIf="error()" class="error">{{ error() }}</p>
+
+  <div *ngIf="items().length; else empty">
+    <table>
+      <thead>
+        <tr>
+          <th>Variety</th>
+          <th>Quantity</th>
+          <th>Unit price</th>
+          <th>Line total</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr *ngFor="let item of items()">
+          <td>{{ item.variety | titlecase }}</td>
+          <td>{{ item.quantity }}</td>
+          <td>{{ item.unit_price | currency }}</td>
+          <td>{{ item.line_total | currency }}</td>
+          <td><button class="btn-outline" (click)="remove(item.id)">Remove</button></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p class="total">Subtotal: {{ total | currency }}</p>
+    <button class="btn-primary" (click)="goToCheckout()">Proceed to checkout</button>
+  </div>
+
+  <ng-template #empty>
+    <p>Your cart is empty.</p>
+  </ng-template>
+</section>

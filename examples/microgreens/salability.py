@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from pathlib import Path
 
@@ -237,8 +237,7 @@ def main() -> None:
         for batch in batches:
             salable, grade, reasons = is_salable(batch)
             status = "SALABLE" if salable else "not ready"
-            print(f"#{batch.id} {batch.variety} sown {batch.sow_date} "
-                  f"[{status}, grade={grade}]")
+            print(f"#{batch.id} {batch.variety} sown {batch.sow_date} [{status}, grade={grade}]")
 
 
 if __name__ == "__main__":
