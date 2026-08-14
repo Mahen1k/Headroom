@@ -47,6 +47,32 @@ npm start   # ng serve, http://localhost:4200
 The frontend talks to the backend at `http://localhost:8080/api`
 (see `frontend/src/environments/environment.ts`).
 
+## Testing
+
+### Backend
+
+```bash
+cd backend
+cargo test
+# 10 unit tests for the salability grading rules (models.rs) +
+# 9 integration tests exercising the full HTTP API (tests/api.rs) against
+# an in-memory SQLite database.
+```
+
+### Frontend
+
+```bash
+cd frontend
+npm install
+CHROME_BIN=/path/to/chromium npx ng test --watch=false --browsers=ChromeHeadlessCI
+# 19 unit tests covering AuthService, CartService, ProductService, the auth
+# HTTP interceptor, and the auth/admin route guards.
+```
+
+`karma.conf.js` defines the `ChromeHeadlessCI` launcher (adds `--no-sandbox`,
+needed when running as root in a container). Omit `--browsers` to run
+interactively against a local Chrome/Chromium instead.
+
 ## API overview
 
 | Method | Path                          | Auth  | Description                        |

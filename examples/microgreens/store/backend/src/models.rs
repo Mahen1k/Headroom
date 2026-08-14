@@ -186,3 +186,117 @@ pub struct OrderView {
     pub discount_code: Option<String>,
     pub items: Vec<CartItemView>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn healthy_sunflower(sow_date: &str) -> BatchRow {
+        BatchRow {
+            id: 1,
+            variety: "sunflower".into(),
+            sow_date: sow_date.into(),
+            quantity_trays: 10,
+            price_per_tray: 4.5,
+            height_cm: Some(7.5),
+            mold: Some(0),
+            color_uniform: Some(1),
+            stem_ok: Some(1),
+            root_mat_ok: Some(1),
+        }
+    }
+
+    fn date(s: &str) -> NaiveDate {
+        NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
+    }
+
+    #[test]
+    fn healthy_batch_within_window_is_salable_grade_a() {
+        let row = healthy_sunflower("2026-08-04");
+        let (salable, grade, reasons) = evaluate_salability(&row, date("2026-08-14"));
+        assert!(salable);
+        assert_eq!(grade, "A");
+        assert!(reasons.is_empty());
+    }
+
+    #[test]
+    fn too_young_batch_is_not_salable() {
+        let row = healthy_sunflower("2026-08-13");
+        let (salable, _grade, reasons) = evaluate_salability(&row, date("2026-08-14"));
+        assert!(!salable);
+        assert!(reasons.iter().any(|r| r.contains("only 1 days")));
+    }
+
+    #[test]
+    fn overgrown_batch_is_not_salable() {
+        let row = healthy_sunflower("2026-07-01");
+        let (salable, _grade, reasons) = evaluate_salability(&row, date("2026-08-14"));
+        assert!(!salable);
+        assert!(reasons.iter().any(|r| r.contains("overgrown")));
+    }
+
+    #[test]
+    fn mold_forces_reject_regardless_of_other_checks() {
+        let mut row = healthy_sunflower("2026-08-04");
+        row.mold = Some(1);
+        let (salable, grade, reasons) = evaluate_salability(&row, date("2026-08-14"));
+        assert!(!salable);
+        assert_eq!(grade, "reject");
+        assert_eq!(reasons, vec!["mold detected".to_string()]);
+    }
+
+    #[test]
+    fn single_soft_issue_grades_b_but_still_salable() {
+        let mut row = healthy_sunflower("2026-08-04");
+        row.stem_ok = Some(0);
+        let (salable, grade, reasons) = evaluate_salability(&row, date("2026-08-14"));
+        assert!(salable);
+        assert_eq!(grade, "B");
+        assert_eq!(reasons, vec!["stems too short/leggy".to_string()]);
+    }
+
+    #[test]
+    fn two_soft_issues_reject() {
+        let mut row = healthy_sunflower("2026-08-04");
+        row.stem_ok = Some(0);
+        row.root_mat_ok = Some(0);
+        let (salable, grade, _reasons) = evaluate_salability(&row, date("2026-08-14"));
+        assert!(!salable);
+        assert_eq!(grade, "reject");
+    }
+
+    #[test]
+    fn height_outside_window_is_not_salable() {
+        let mut row = healthy_sunflower("2026-08-04");
+        row.height_cm = Some(2.0);
+        let (salable, _grade, reasons) = evaluate_salability(&row, date("2026-08-14"));
+        assert!(!salable);
+        assert!(reasons.iter().any(|r| r.contains("below minimum")));
+    }
+
+    #[test]
+    fn no_quality_check_yet_is_unrated() {
+        let mut row = healthy_sunflower("2026-08-04");
+        row.height_cm = None;
+        let (salable, grade, reasons) = evaluate_salability(&row, date("2026-08-14"));
+        assert!(!salable);
+        assert_eq!(grade, "unrated");
+        assert!(reasons.iter().any(|r| r.contains("no quality check recorded")));
+    }
+
+    #[test]
+    fn unknown_variety_is_unrated() {
+        let mut row = healthy_sunflower("2026-08-04");
+        row.variety = "durian".into();
+        let (salable, grade, _reasons) = evaluate_salability(&row, date("2026-08-14"));
+        assert!(!salable);
+        assert_eq!(grade, "unrated");
+    }
+
+    #[test]
+    fn known_varieties_matches_variety_window_entries() {
+        for variety in known_varieties() {
+            assert!(variety_window(variety).is_some());
+        }
+    }
+}

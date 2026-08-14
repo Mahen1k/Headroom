@@ -2,8 +2,13 @@ use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::SqlitePool;
 
 pub async fn init_pool(database_url: &str) -> SqlitePool {
+    // An in-memory database only persists for the lifetime of a single
+    // connection, so pooled connections must share one (`max_connections(1)`)
+    // or each request would see its own empty database.
+    let max_connections = if database_url.contains(":memory:") { 1 } else { 5 };
+
     let pool = SqlitePoolOptions::new()
-        .max_connections(5)
+        .max_connections(max_connections)
         .connect(database_url)
         .await
         .expect("failed to connect to sqlite database");
