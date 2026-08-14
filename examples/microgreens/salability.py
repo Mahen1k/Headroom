@@ -237,8 +237,7 @@ def main() -> None:
         for batch in batches:
             salable, grade, reasons = is_salable(batch)
             status = "SALABLE" if salable else "not ready"
-            print(f"#{batch.id} {batch.variety} sown {batch.sow_date} "
-                  f"[{status}, grade={grade}]")
+            print(f"#{batch.id} {batch.variety} sown {batch.sow_date} [{status}, grade={grade}]")
 
 
 if __name__ == "__main__":
