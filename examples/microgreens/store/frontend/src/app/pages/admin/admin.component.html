@@ -1,0 +1,63 @@
+<section class="page">
+  <h1>Admin: Batch Management</h1>
+  <p *ngIf="message()" class="success">{{ message() }}</p>
+  <p *ngIf="error()" class="error">{{ error() }}</p>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Add batch</h2>
+      <form (ngSubmit)="submitBatch()">
+        <label>
+          Variety
+          <select name="variety" [(ngModel)]="batch.variety" required>
+            <option *ngFor="let v of varieties()" [value]="v">{{ v | titlecase }}</option>
+          </select>
+        </label>
+        <label>
+          Sow date
+          <input type="date" name="sow_date" [(ngModel)]="batch.sow_date" required />
+        </label>
+        <label>
+          Quantity (trays)
+          <input type="number" name="quantity_trays" min="1" [(ngModel)]="batch.quantity_trays" required />
+        </label>
+        <label>
+          Price per tray
+          <input type="number" name="price_per_tray" min="0" step="0.01" [(ngModel)]="batch.price_per_tray" required />
+        </label>
+        <button type="submit">Add batch</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>Record quality check</h2>
+      <form (ngSubmit)="submitInspect()">
+        <label>
+          Batch ID
+          <input type="number" name="batch_id" min="1" [(ngModel)]="inspect.batch_id" required />
+        </label>
+        <label>
+          Height (cm)
+          <input type="number" name="height_cm" min="0" step="0.1" [(ngModel)]="inspect.height_cm" required />
+        </label>
+        <label class="checkbox">
+          <input type="checkbox" name="mold" [(ngModel)]="inspect.mold" />
+          Mold present
+        </label>
+        <label class="checkbox">
+          <input type="checkbox" name="color_uniform" [(ngModel)]="inspect.color_uniform" />
+          Color uniform
+        </label>
+        <label class="checkbox">
+          <input type="checkbox" name="stem_ok" [(ngModel)]="inspect.stem_ok" />
+          Stems healthy
+        </label>
+        <label class="checkbox">
+          <input type="checkbox" name="root_mat_ok" [(ngModel)]="inspect.root_mat_ok" />
+          Root mat established
+        </label>
+        <button type="submit">Save quality check</button>
+      </form>
+    </div>
+  </div>
+</section>

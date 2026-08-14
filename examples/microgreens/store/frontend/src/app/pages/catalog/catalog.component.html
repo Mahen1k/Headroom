@@ -1,0 +1,30 @@
+<section class="page">
+  <h1>Fresh Microgreens</h1>
+  <p *ngIf="message()" class="success">{{ message() }}</p>
+  <p *ngIf="error()" class="error">{{ error() }}</p>
+
+  <div class="grid" *ngIf="products().length; else empty">
+    <div class="card" *ngFor="let product of products()">
+      <h2>{{ product.variety | titlecase }}</h2>
+      <p class="grade">Grade {{ product.grade }}</p>
+      <p>{{ product.quantity_trays }} tray(s) available</p>
+      <p>Harvested {{ product.days_since_sowing }} days after sowing</p>
+      <p class="price">{{ product.price_per_tray | currency }} / tray</p>
+
+      <div class="add-row">
+        <input
+          type="number"
+          min="1"
+          [max]="product.quantity_trays"
+          [value]="quantityFor(product.id)"
+          (input)="setQuantity(product.id, $any($event.target).value)"
+        />
+        <button (click)="addToCart(product)">Add to cart</button>
+      </div>
+    </div>
+  </div>
+
+  <ng-template #empty>
+    <p>No microgreens are ready to sell right now — check back soon.</p>
+  </ng-template>
+</section>

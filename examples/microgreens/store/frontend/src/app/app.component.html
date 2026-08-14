@@ -1,0 +1,21 @@
+<header class="site-header">
+  <a class="brand" routerLink="/">🌱 Microgreens Store</a>
+  <nav>
+    <a routerLink="/">Shop</a>
+    <ng-container *ngIf="auth.isLoggedIn(); else guestLinks">
+      <a routerLink="/cart">Cart</a>
+      <a routerLink="/orders">Orders</a>
+      <a *ngIf="auth.isAdmin()" routerLink="/admin">Admin</a>
+      <span class="email">{{ auth.email() }}</span>
+      <button (click)="logout()">Log out</button>
+    </ng-container>
+    <ng-template #guestLinks>
+      <a routerLink="/login">Log in</a>
+      <a routerLink="/register">Register</a>
+    </ng-template>
+  </nav>
+</header>
+
+<main>
+  <router-outlet></router-outlet>
+</main>

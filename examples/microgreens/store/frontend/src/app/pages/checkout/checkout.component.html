@@ -1,0 +1,37 @@
+<section class="page">
+  <h1>Checkout</h1>
+
+  <div *ngIf="!completedOrder(); else confirmation">
+    <p *ngIf="error()" class="error">{{ error() }}</p>
+
+    <table>
+      <tbody>
+        <tr *ngFor="let item of items()">
+          <td>{{ item.variety | titlecase }}</td>
+          <td>{{ item.quantity }} tray(s)</td>
+          <td>{{ item.line_total | currency }}</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="total">Subtotal: {{ subtotal | currency }}</p>
+
+    <label>
+      Discount code
+      <input type="text" [(ngModel)]="discountCode" placeholder="e.g. FRESH10" />
+    </label>
+
+    <button (click)="placeOrder()">Place order</button>
+  </div>
+
+  <ng-template #confirmation>
+    <div class="card">
+      <h2>Order #{{ completedOrder()!.id }} confirmed</h2>
+      <p>Subtotal: {{ completedOrder()!.subtotal | currency }}</p>
+      <p *ngIf="completedOrder()!.discount_code">
+        Discount applied: {{ completedOrder()!.discount_code }}
+      </p>
+      <p class="total">Total charged: {{ completedOrder()!.total | currency }}</p>
+      <a routerLink="/">Continue shopping</a>
+    </div>
+  </ng-template>
+</section>
