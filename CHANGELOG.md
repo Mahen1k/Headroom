@@ -284,6 +284,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **code:** fix two `CodeAwareCompressor` AST-reassembly bugs: an exported JS/TS function or class (`export function foo() {`) produced a duplicated `export export` keyword and invalid syntax, because line-based node slicing (used to preserve indentation) pulled in the preceding `export` sibling's text on top of the `export_statement` handler's own prefix reconstruction. Separately, in every supported language, a doc comment immediately above a top-level function, class, or type was detached from its declaration during extraction and re-emitted in a cluster at the end of the compressed output instead of staying attached to what it documents.
 - * **proxy:** Buffered upstream responses containing a `server_tool_use` (or any other unrecognized Anthropic content block) no longer turn a fully-generated response into an HTTP 502. `StreamingMixin._response_to_sse` raised `ValueError` on unknown block types after the entire upstream generation had already been buffered, so a slow-but-successful response failed and the client retried the whole multi-minute request. Unknown blocks are now emitted verbatim in `content_block_start` (following the existing redacted_thinking` pattern), so `server_tool_use`, `server_tool_result`, `mcp_tool_use`, and future block types round-trip ([#1806](https://github.com/headroomlabs-ai/headroom/issues/1806)).
 
+## [0.36.0](https://github.com/Mahen1k/Headroom/compare/v0.35.0...v0.36.0) (2026-08-14)
+
+
+### Features
+
+* add deterministic runtime rollout controls ([#1490](https://github.com/Mahen1k/Headroom/issues/1490)) ([3077ac8](https://github.com/Mahen1k/Headroom/commit/3077ac81e8ef3ddefebbe308ea37a4e9bb2100e6))
+* add microgreens salability CLI tool ([9aed555](https://github.com/Mahen1k/Headroom/commit/9aed555653dd6b4ef94635db2e3281680cfa0a5b))
+
+
+### Bug Fixes
+
+* **ccr:** verify a scanned marker's hash before advertising it ([#2908](https://github.com/Mahen1k/Headroom/issues/2908)) ([41dab2d](https://github.com/Mahen1k/Headroom/commit/41dab2d09925658b96fed492d534346ce1930f4c))
+* **ci:** prevent native detector from hanging test shards ([#2996](https://github.com/Mahen1k/Headroom/issues/2996)) ([a708c05](https://github.com/Mahen1k/Headroom/commit/a708c0571eecfb53eaab6b787b7a6ace9b21c162))
+* **ci:** unjam release and Docker publishing ([#2958](https://github.com/Mahen1k/Headroom/issues/2958)) ([e269afb](https://github.com/Mahen1k/Headroom/commit/e269afb935f298a833a189acfb8573e908b3b60b))
+* **claude:** reject conflicting auth before proxy startup ([#2993](https://github.com/Mahen1k/Headroom/issues/2993)) ([2d88e31](https://github.com/Mahen1k/Headroom/commit/2d88e31a404e2be6c1c428deb2a387599eb820ba))
+* **cli/install:** resolve the deployment profile instead of dead-ending on default ([#2832](https://github.com/Mahen1k/Headroom/issues/2832)) ([8252619](https://github.com/Mahen1k/Headroom/commit/82526191a103a8d0e079d170e47631b3c2bcb0d9))
+* **docker:** ship Bedrock auth and current registry ([#2982](https://github.com/Mahen1k/Headroom/issues/2982)) ([eafdf11](https://github.com/Mahen1k/Headroom/commit/eafdf11a2cea44aabc51ce59bbc031e0aaee9640))
+* **install:** consolidate Windows fallback and cleanup safety ([#2980](https://github.com/Mahen1k/Headroom/issues/2980)) ([ddd2a25](https://github.com/Mahen1k/Headroom/commit/ddd2a259ecce4e57202a68a74a2c1adcb879679b))
+* **mcp:** restore SDK v1 compatibility cap ([#2978](https://github.com/Mahen1k/Headroom/issues/2978)) ([6077e5a](https://github.com/Mahen1k/Headroom/commit/6077e5a149ee6548edaff033f2cdffffce6ea0cf))
+* **memory:** sanitize entity_refs to prevent dict-shaped entries crashing search ([#2951](https://github.com/Mahen1k/Headroom/issues/2951)) ([2d1e96b](https://github.com/Mahen1k/Headroom/commit/2d1e96b85c61cc7aab821750f549f24d54cbb6f5))
+* **onnx:** enforce Rust API-24 runtime compatibility ([#2979](https://github.com/Mahen1k/Headroom/issues/2979)) ([a3fe5cb](https://github.com/Mahen1k/Headroom/commit/a3fe5cb65bed625e2a6cb415821bd0798754ce08))
+* **openclaw-plugin:** circuit breaker + per-request timeout for proxy resilience ([#639](https://github.com/Mahen1k/Headroom/issues/639)) ([6576ef6](https://github.com/Mahen1k/Headroom/commit/6576ef639cbb7be8bc5e6c25134956803d18f8d8))
+* **proxy/anthropic:** don't buffer a CCR stream when passthrough discards the stream flip ([#2953](https://github.com/Mahen1k/Headroom/issues/2953)) ([f1c34d3](https://github.com/Mahen1k/Headroom/commit/f1c34d336cf35db341153c1c65e8c15219398340))
+* **proxy/anthropic:** repair headroom_retrieve history references the tools array cannot support ([#2876](https://github.com/Mahen1k/Headroom/issues/2876)) ([7de3573](https://github.com/Mahen1k/Headroom/commit/7de35739c61bed385dd078aee1b36865938c486d))
+* **proxy:** adapt 200 SSE upstream replies on buffered /v1/responses instead of 502 ([#2622](https://github.com/Mahen1k/Headroom/issues/2622)) ([d76fce0](https://github.com/Mahen1k/Headroom/commit/d76fce04a39b3f206e38a02e012d50b2c728f7ca))
+* **proxy:** complete stateless Responses and buffered CCR lifecycle ([#2997](https://github.com/Mahen1k/Headroom/issues/2997)) ([8a1d38b](https://github.com/Mahen1k/Headroom/commit/8a1d38bc5da87b49a530df22090c3a156d2d0cd6))
+* **proxy:** relocate stray system-role messages to the top-level system param ([#765](https://github.com/Mahen1k/Headroom/issues/765)) ([#1357](https://github.com/Mahen1k/Headroom/issues/1357)) ([9fde127](https://github.com/Mahen1k/Headroom/commit/9fde12753416a6102535235b822e44afebf76e9e))
+* tool_search_tool_regex deferred and falsely resolved on direct-Anthropic path ([#2971](https://github.com/Mahen1k/Headroom/issues/2971)) ([8ea87e7](https://github.com/Mahen1k/Headroom/commit/8ea87e7804abfbb55beaf869e50dcb66deab975a))
+* **vscode:** persist compatible Claude modes and route Copilot CAPI ([#2986](https://github.com/Mahen1k/Headroom/issues/2986)) ([1aa701a](https://github.com/Mahen1k/Headroom/commit/1aa701adaa1ff792dd0e701f498d8d0326655670))
+* **wrap:** stop the Serena pre-index stalling the launch path for 300s ([#2945](https://github.com/Mahen1k/Headroom/issues/2945)) ([6147883](https://github.com/Mahen1k/Headroom/commit/6147883d5e3a92cc7b890e6c05dce4391090c7e4))
+* **wrap:** verify proxy deps before mutating Codex config ([#1628](https://github.com/Mahen1k/Headroom/issues/1628)) ([b7f342c](https://github.com/Mahen1k/Headroom/commit/b7f342c153a3e6e43a9d3df006bcd4dd69842d00))
+
+
+### Dependencies
+
+* bump criterion from 0.5.1 to 0.8.2 ([#2965](https://github.com/Mahen1k/Headroom/issues/2965)) ([b30f339](https://github.com/Mahen1k/Headroom/commit/b30f339d694abcd8dada76a34a1d69e30390bfc2))
+* update mcp requirement from &lt;2.0.0,&gt;=1.28.1 to &gt;=1.28.1,&lt;3.0.0 ([#2963](https://github.com/Mahen1k/Headroom/issues/2963)) ([d6fb536](https://github.com/Mahen1k/Headroom/commit/d6fb5365f67b9b7f90c7c55caead16ca6b41c586))
+
 ## [0.35.0](https://github.com/headroomlabs-ai/headroom/compare/v0.34.0...v0.35.0) (2026-08-12)
 
 
